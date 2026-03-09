@@ -5,7 +5,7 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
   labels:
-    openmcp.cloud/cluster: onboarding
+    openmcp.cloud/cluster: mcp
   name: kubestatemetricsconfigs.ksm.services.openmcp.cloud
 spec:
   group: ksm.services.openmcp.cloud

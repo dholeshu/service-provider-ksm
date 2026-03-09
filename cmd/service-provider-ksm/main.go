@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
-	"time"
 
 	flag "github.com/spf13/pflag"
 
@@ -31,15 +30,9 @@ import (
 	crdutil "github.com/openmcp-project/controller-utils/pkg/crds"
 	"github.com/openmcp-project/controller-utils/pkg/logging"
 	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
-	"github.com/openmcp-project/openmcp-operator/api/common"
 	openmcpconst "github.com/openmcp-project/openmcp-operator/api/constants"
-	providerv1alpha1 "github.com/openmcp-project/openmcp-operator/api/provider/v1alpha1"
-	"github.com/openmcp-project/openmcp-operator/lib/clusteraccess"
-	"github.com/openmcp-project/openmcp-operator/lib/utils"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/dholeshu/service-provider-ksm/api/crds"
-	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -60,36 +53,23 @@ import (
 )
 
 var (
-	platformScheme   = runtime.NewScheme()
-	onboardingScheme = runtime.NewScheme()
-	mcpScheme        = runtime.NewScheme()
-	setupLog         = ctrl.Log.WithName("setup")
+	// When running on MCP cluster, platformScheme refers to the local MCP cluster
+	localMCPScheme = runtime.NewScheme()
+	setupLog       = ctrl.Log.WithName("setup")
 )
 
 func init() {
 	// +kubebuilder:scaffold:scheme
-	initPlatformScheme()
-	initOnboardingScheme()
-	initMcpScheme()
+	initLocalMCPScheme()
 }
 
-func initPlatformScheme() {
-	utilruntime.Must(clientgoscheme.AddToScheme(platformScheme))
-	utilruntime.Must(apiextensionv1.AddToScheme(platformScheme))
-	utilruntime.Must(kubestatemetricssv1alpha1.AddToScheme(platformScheme))
-	utilruntime.Must(clustersv1alpha1.AddToScheme(platformScheme))
-	utilruntime.Must(providerv1alpha1.AddToScheme(platformScheme))
-}
-
-func initOnboardingScheme() {
-	utilruntime.Must(clientgoscheme.AddToScheme(onboardingScheme))
-	utilruntime.Must(apiextensionv1.AddToScheme(onboardingScheme))
-	utilruntime.Must(kubestatemetricssv1alpha1.AddToScheme(onboardingScheme))
-}
-
-func initMcpScheme() {
-	utilruntime.Must(clientgoscheme.AddToScheme(mcpScheme))
-	utilruntime.Must(apiextensionv1.AddToScheme(mcpScheme))
+func initLocalMCPScheme() {
+	// MCP cluster needs all these types
+	utilruntime.Must(clientgoscheme.AddToScheme(localMCPScheme))
+	utilruntime.Must(apiextensionv1.AddToScheme(localMCPScheme))
+	utilruntime.Must(kubestatemetricssv1alpha1.AddToScheme(localMCPScheme))
+	// Note: We don't need clustersv1alpha1 or providerv1alpha1 on MCP cluster
+	// Those are platform-only resources
 }
 
 // nolint:gocyclo
@@ -208,75 +188,45 @@ func main() {
 		os.Exit(1)
 	}
 	ctrl.SetLogger(log.Logr())
-	platformCluster, err := initializePlatformCluster()
+
+	// Initialize local MCP cluster (this is the cluster where the service provider is running)
+	localMCPCluster, err := initializeLocalMCPCluster()
 	if err != nil {
-		setupLog.Error(err, "Failed to initialize platform cluster")
+		setupLog.Error(err, "Failed to initialize local MCP cluster")
 		os.Exit(1)
 	}
+
 	podNamespace := os.Getenv(openmcpconst.EnvVariablePodNamespace)
 	if podNamespace == "" {
 		setupLog.Error(fmt.Errorf("environment variable %s not set - cannot determine source namespace for secrets", openmcpconst.EnvVariablePodNamespace), "pod namespace missing")
 		os.Exit(1)
 	}
-	// TODO: define minimum set of permission required to run the init and run part of your service provider
-	adminPermissions := []clustersv1alpha1.PermissionsRequest{
-		{
 
-			Rules: []rbacv1.PolicyRule{
-				{
-					APIGroups: []string{"*"},
-					Resources: []string{"*"},
-					Verbs:     []string{"*"},
-				},
-			},
-		},
-	}
-	clusterAccessManager := clusteraccess.NewClusterAccessManager(platformCluster.Client(),
-		"kubestatemetrics.ksm.services.openmcp.cloud", os.Getenv("POD_NAMESPACE"))
-	clusterAccessManager.WithLogger(&log).
-		WithInterval(10 * time.Second).
-		WithTimeout(30 * time.Minute)
 	ctx := context.Background()
-	// init (job that installs CRDs)
+	// init (job that installs CRDs on local MCP cluster)
 	if command == "init" {
-		onboardingCluster, err := clusterAccessManager.CreateAndWaitForCluster(ctx, "onboarding-init",
-			clustersv1alpha1.PURPOSE_ONBOARDING, onboardingScheme, adminPermissions)
-
-		if err != nil {
-			setupLog.Error(err, "Failed to create and wait for onboarding cluster access")
-		}
+		// When running on MCP cluster, we install CRDs locally
+		setupLog.Info("Installing CRDs on local MCP cluster")
 
 		crdManager := crdutil.NewCRDManager(openmcpconst.ClusterLabel, crds.CRDs)
-
-		crdManager.AddCRDLabelToClusterMapping(clustersv1alpha1.PURPOSE_PLATFORM, platformCluster)
-		crdManager.AddCRDLabelToClusterMapping(clustersv1alpha1.PURPOSE_ONBOARDING, onboardingCluster)
+		// Install KubeStateMetrics and KubeStateMetricsConfig CRDs locally
+		crdManager.AddCRDLabelToClusterMapping(clustersv1alpha1.PURPOSE_MCP, localMCPCluster)
 
 		if err := crdManager.CreateOrUpdateCRDs(ctx, &log); err != nil {
-			setupLog.Error(err, "Failed to create or update CRDs")
+			setupLog.Error(err, "Failed to create or update CRDs on local cluster")
+			os.Exit(1)
 		}
 
-		spGVK := metav1.GroupVersionKind{
-			Group:   kubestatemetricssv1alpha1.GroupVersion.Group,
-			Version: kubestatemetricssv1alpha1.GroupVersion.Version,
-			Kind:    "KubeStateMetrics",
-		}
-		if err := utils.RegisterGVKsAtServiceProvider(ctx, platformCluster.Client(), providerName, spGVK); err != nil {
-			setupLog.Error(err, "Failed to register GVK at ServiceProvider")
-			return
-		}
-
+		setupLog.Info("Successfully installed CRDs on local MCP cluster")
 		return
 	}
 	// run (sp controller deployment)
-	onboardingCluster, err := clusterAccessManager.CreateAndWaitForCluster(ctx, "onboarding-run",
-		clustersv1alpha1.PURPOSE_ONBOARDING, onboardingScheme, adminPermissions)
-	if err != nil {
-		setupLog.Error(err, "Failed to create and wait for onboarding cluster access")
-	}
+	// Service provider runs on MCP cluster, watches local cluster, and deploys locally
+	setupLog.Info("Service provider running on local MCP cluster, watching for KubeStateMetrics resources")
 	// end sp specifics
 
-	mgr, err := ctrl.NewManager(onboardingCluster.RESTConfig(), ctrl.Options{
-		Scheme:                 onboardingScheme,
+	mgr, err := ctrl.NewManager(localMCPCluster.RESTConfig(), ctrl.Options{
+		Scheme:                 localMCPScheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
@@ -298,33 +248,17 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
-	if err = mgr.Add(platformCluster.Cluster()); err != nil {
-		setupLog.Error(err, "unable to add platform cluster to manager")
-		os.Exit(1)
-	}
 	providerConfigUpdates := make(chan event.GenericEvent)
 	spr := spruntime.NewSPReconciler[*kubestatemetricssv1alpha1.KubeStateMetrics, *kubestatemetricssv1alpha1.ProviderConfig](
 		func() *kubestatemetricssv1alpha1.KubeStateMetrics {
 			return &kubestatemetricssv1alpha1.KubeStateMetrics{}
 		},
 	).
-		WithPlatformCluster(platformCluster).
-		WithOnboardingCluster(onboardingCluster).
+		WithPlatformCluster(localMCPCluster).
 		WithServiceProviderReconciler(&controller.KubeStateMetricsReconciler{
-			OnboardingCluster: onboardingCluster,
-			PlatformCluster:   platformCluster,
-			PodNamespace:      podNamespace,
-		}).
-		WithClusterAccessReconciler(clusteraccess.NewClusterAccessReconciler(platformCluster.Client(), "KubeStateMetrics").
-			WithMCPScheme(mcpScheme).
-			WithRetryInterval(10 * time.Second).
-			WithMCPPermissions(adminPermissions).WithMCPRoleRefs([]common.RoleRef{
-			{
-				Name: "cluster-admin",
-				Kind: "ClusterRole",
-			}}).
-			SkipWorkloadCluster(),
-		)
+			LocalMCPCluster: localMCPCluster,
+			PodNamespace:    podNamespace,
+		})
 	if err := spr.SetupWithManager(mgr, "kubestatemetrics", providerConfigUpdates); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KubeStateMetrics")
 		os.Exit(1)
@@ -335,23 +269,11 @@ func main() {
 			return &kubestatemetricssv1alpha1.KubeStateMetricsConfig{}
 		},
 	).
-		WithPlatformCluster(platformCluster).
-		WithOnboardingCluster(onboardingCluster).
+		WithPlatformCluster(localMCPCluster).
 		WithServiceProviderReconciler(&controller.KubeStateMetricsConfigReconciler{
-			OnboardingCluster: onboardingCluster,
-			PlatformCluster:   platformCluster,
-			PodNamespace:      podNamespace,
-		}).
-		WithClusterAccessReconciler(clusteraccess.NewClusterAccessReconciler(platformCluster.Client(), "KubeStateMetricsConfig").
-			WithMCPScheme(mcpScheme).
-			WithRetryInterval(10 * time.Second).
-			WithMCPPermissions(adminPermissions).WithMCPRoleRefs([]common.RoleRef{
-			{
-				Name: "cluster-admin",
-				Kind: "ClusterRole",
-			}}).
-			SkipWorkloadCluster(),
-		)
+			LocalMCPCluster: localMCPCluster,
+			PodNamespace:    podNamespace,
+		})
 	if err := configSpr.SetupWithManager(mgr, "kubestatemetricsconfig", providerConfigUpdates); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KubeStateMetricsConfig")
 		os.Exit(1)
@@ -360,7 +282,7 @@ func main() {
 	pcr := spruntime.NewPCReconciler(providerName, func() *kubestatemetricssv1alpha1.ProviderConfig {
 		return &kubestatemetricssv1alpha1.ProviderConfig{}
 	}).
-		WithPlatformCluster(platformCluster).
+		WithPlatformCluster(localMCPCluster).
 		WithUpdateChannel(providerConfigUpdates)
 	if err := pcr.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ProviderConfig")
@@ -384,15 +306,15 @@ func main() {
 	}
 }
 
-// initializePlatformCluster initializes the platform cluster with the necessary REST config and client.
-func initializePlatformCluster() (*clusters.Cluster, error) {
-	platformCluster := clusters.New("platform")
+// initializeLocalMCPCluster initializes the local MCP cluster with the necessary REST config and client.
+func initializeLocalMCPCluster() (*clusters.Cluster, error) {
+	localCluster := clusters.New("local-mcp")
 
-	platformCluster = platformCluster.WithRESTConfig(ctrl.GetConfigOrDie())
+	localCluster = localCluster.WithRESTConfig(ctrl.GetConfigOrDie())
 
-	if err := platformCluster.InitializeClient(platformScheme); err != nil {
-		setupLog.Error(err, "Failed to initialize client for platform cluster")
+	if err := localCluster.InitializeClient(localMCPScheme); err != nil {
+		setupLog.Error(err, "Failed to initialize client for local MCP cluster")
 		return nil, err
 	}
-	return platformCluster, nil
+	return localCluster, nil
 }

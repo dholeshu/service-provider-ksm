@@ -40,10 +40,8 @@ const (
 
 // KubeStateMetricsConfigReconciler reconciles a KubeStateMetricsConfig object
 type KubeStateMetricsConfigReconciler struct {
-	// OnboardingCluster is the cluster where this controller watches KubeStateMetricsConfig resources
-	OnboardingCluster *clusters.Cluster
-	// PlatformCluster is the cluster where this controller is deployed and configured
-	PlatformCluster *clusters.Cluster
+	// LocalMCPCluster is the local MCP cluster where this controller runs, watches resources, and creates ConfigMaps
+	LocalMCPCluster *clusters.Cluster
 	// PodNamespace is the namespace where this controller is deployed in
 	PodNamespace string
 }

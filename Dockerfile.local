@@ -1,0 +1,7 @@
+# Use distroless as minimal base image
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /
+COPY bin/service-provider-ksm /service-provider-ksm
+USER 65532:65532
+
+ENTRYPOINT ["/service-provider-ksm"]

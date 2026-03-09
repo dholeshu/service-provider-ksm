@@ -47,10 +47,8 @@ const (
 
 // KubeStateMetricsReconciler reconciles a KubeStateMetrics object
 type KubeStateMetricsReconciler struct {
-	// OnboardingCluster is the cluster where this controller watches KubeStateMetrics resources and reacts to their changes.
-	OnboardingCluster *clusters.Cluster
-	// PlatformCluster is the cluster where this controller is deployed and configured.
-	PlatformCluster *clusters.Cluster
+	// LocalMCPCluster is the local MCP cluster where this controller runs, watches resources, and deploys kube-state-metrics.
+	LocalMCPCluster *clusters.Cluster
 	// PodNamespace is the namespace where this controller is deployed in.
 	PodNamespace string
 }
@@ -131,7 +129,7 @@ func (r *KubeStateMetricsReconciler) CreateOrUpdate(ctx context.Context, svcobj 
 			Namespace: configNamespace,
 		}
 
-		if err := r.OnboardingCluster.Client().Get(ctx, configKey, config); err != nil {
+		if err := r.LocalMCPCluster.Client().Get(ctx, configKey, config); err != nil {
 			l.Error(err, "failed to get referenced KubeStateMetricsConfig", "configRef", svcobj.Spec.ConfigRef.Name)
 			spruntime.StatusProgressing(svcobj, "ConfigRefNotFound", fmt.Sprintf("KubeStateMetricsConfig %s/%s not found", configNamespace, svcobj.Spec.ConfigRef.Name))
 			return ctrl.Result{RequeueAfter: time.Second * 30}, err
