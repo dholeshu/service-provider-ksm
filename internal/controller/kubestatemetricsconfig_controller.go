@@ -53,9 +53,11 @@ func (r *KubeStateMetricsConfigReconciler) CreateOrUpdate(ctx context.Context, c
 
 	// Determine ConfigMap name and namespace
 	configMapName := configObj.Name + configMapSuffix
-	configMapNamespace := configObj.Namespace
+
+	// Use TargetNamespace from spec, default to "observability" if not specified
+	configMapNamespace := configObj.Spec.TargetNamespace
 	if configMapNamespace == "" {
-		configMapNamespace = defaultNamespace
+		configMapNamespace = "observability"
 	}
 
 	// Create namespace if it doesn't exist
@@ -125,9 +127,11 @@ func (r *KubeStateMetricsConfigReconciler) Delete(ctx context.Context, configObj
 	spruntime.StatusTerminating(configObj)
 
 	configMapName := configObj.Name + configMapSuffix
-	configMapNamespace := configObj.Namespace
+
+	// Use TargetNamespace from spec, default to "observability" if not specified
+	configMapNamespace := configObj.Spec.TargetNamespace
 	if configMapNamespace == "" {
-		configMapNamespace = defaultNamespace
+		configMapNamespace = "observability"
 	}
 
 	// Delete ConfigMap

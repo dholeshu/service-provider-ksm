@@ -5,7 +5,7 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
   labels:
-    openmcp.cloud/cluster: mcp
+    openmcp.cloud/cluster: onboarding
   name: kubestatemetricsconfigs.ksm.services.openmcp.cloud
 spec:
   group: ksm.services.openmcp.cloud
@@ -68,6 +68,13 @@ spec:
                 description: |-
                   CustomResourceStateConfig contains the custom resource state metrics configuration
                   This is the content that will be written to custom-resource-state-config.yaml
+                type: string
+              targetNamespace:
+                default: observability
+                description: |-
+                  TargetNamespace is the namespace where the ConfigMap will be created
+                  This should match the namespace where kube-state-metrics is deployed
+                  If not specified, defaults to "observability"
                 type: string
             type: object
           status:

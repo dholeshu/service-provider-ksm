@@ -22,6 +22,13 @@ import (
 
 // KubeStateMetricsConfigSpec defines the desired state of KubeStateMetricsConfig
 type KubeStateMetricsConfigSpec struct {
+	// TargetNamespace is the namespace where the ConfigMap will be created
+	// This should match the namespace where kube-state-metrics is deployed
+	// If not specified, defaults to "observability"
+	// +optional
+	// +kubebuilder:default:="observability"
+	TargetNamespace string `json:"targetNamespace,omitempty"`
+
 	// CustomResourceStateConfig contains the custom resource state metrics configuration
 	// This is the content that will be written to custom-resource-state-config.yaml
 	// +optional
