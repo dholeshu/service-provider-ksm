@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
+	"time"
 
 	flag "github.com/spf13/pflag"
 
@@ -29,11 +30,13 @@ import (
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
 	crdutil "github.com/openmcp-project/controller-utils/pkg/crds"
 	"github.com/openmcp-project/controller-utils/pkg/logging"
+	commonapi "github.com/openmcp-project/openmcp-operator/api/common"
 	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	openmcpconst "github.com/openmcp-project/openmcp-operator/api/constants"
 
 	"github.com/dholeshu/service-provider-ksm/api/crds"
 	apiextensionv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -51,6 +54,50 @@ import (
 	"github.com/dholeshu/service-provider-ksm/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
+
+// LocalClusterAccessProvider implements ClusterAccessProvider for standalone/local operation
+// where the service provider runs on the MCP cluster itself
+type LocalClusterAccessProvider struct {
+	localCluster *clusters.Cluster
+}
+
+// MCPCluster returns the local cluster as the MCP cluster
+func (p *LocalClusterAccessProvider) MCPCluster(ctx context.Context, request ctrl.Request) (*clusters.Cluster, error) {
+	return p.localCluster, nil
+}
+
+// MCPAccessRequest returns a dummy AccessRequest indicating access is granted
+// We don't actually use AccessRequests in standalone mode, but SPReconciler checks for them
+func (p *LocalClusterAccessProvider) MCPAccessRequest(ctx context.Context, request ctrl.Request) (*clustersv1alpha1.AccessRequest, error) {
+	// Return a minimal AccessRequest that indicates access is ready
+	return &clustersv1alpha1.AccessRequest{
+		Status: clustersv1alpha1.AccessRequestStatus{
+			Status: commonapi.Status{
+				Phase: clustersv1alpha1.AccessRequestGranted,
+			},
+		},
+	}, nil
+}
+
+// WorkloadCluster returns nil since we don't use workload clusters
+func (p *LocalClusterAccessProvider) WorkloadCluster(ctx context.Context, request ctrl.Request) (*clusters.Cluster, error) {
+	return nil, nil
+}
+
+// WorkloadAccessRequest returns nil since we don't use workload clusters
+func (p *LocalClusterAccessProvider) WorkloadAccessRequest(ctx context.Context, request ctrl.Request) (*clustersv1alpha1.AccessRequest, error) {
+	return nil, nil
+}
+
+// Reconcile is a no-op since we don't manage AccessRequests in standalone mode
+func (p *LocalClusterAccessProvider) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
+	return ctrl.Result{}, nil
+}
+
+// ReconcileDelete is a no-op since we don't manage AccessRequests in standalone mode
+func (p *LocalClusterAccessProvider) ReconcileDelete(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
+	return ctrl.Result{}, nil
+}
 
 var (
 	// When running on MCP cluster, platformScheme refers to the local MCP cluster
@@ -249,12 +296,29 @@ func main() {
 		os.Exit(1)
 	}
 	providerConfigUpdates := make(chan event.GenericEvent)
+
+	// Create a default ProviderConfig for standalone mode
+	// In standalone mode, we bypass the PCReconciler and use a static config
+	defaultProviderConfig := &kubestatemetricssv1alpha1.ProviderConfig{}
+	defaultProviderConfig.SetName("kubestatemetrics")
+	pollInterval := metav1.Duration{Duration: 1 * time.Minute}
+	defaultProviderConfig.Spec.PollInterval = &pollInterval
+
+	// Create a local cluster access provider for standalone mode
+	// This provides the local MCP cluster without needing ClusterAccess/AccessRequests
+	localClusterAccessProvider := &LocalClusterAccessProvider{
+		localCluster: localMCPCluster,
+	}
+
 	spr := spruntime.NewSPReconciler[*kubestatemetricssv1alpha1.KubeStateMetrics, *kubestatemetricssv1alpha1.ProviderConfig](
 		func() *kubestatemetricssv1alpha1.KubeStateMetrics {
 			return &kubestatemetricssv1alpha1.KubeStateMetrics{}
 		},
 	).
 		WithPlatformCluster(localMCPCluster).
+		WithOnboardingCluster(localMCPCluster).
+		WithClusterAccessReconciler(localClusterAccessProvider).
+		WithProviderConfig(defaultProviderConfig).
 		WithServiceProviderReconciler(&controller.KubeStateMetricsReconciler{
 			LocalMCPCluster: localMCPCluster,
 			PodNamespace:    podNamespace,
@@ -270,6 +334,9 @@ func main() {
 		},
 	).
 		WithPlatformCluster(localMCPCluster).
+		WithOnboardingCluster(localMCPCluster).
+		WithClusterAccessReconciler(localClusterAccessProvider).
+		WithProviderConfig(defaultProviderConfig).
 		WithServiceProviderReconciler(&controller.KubeStateMetricsConfigReconciler{
 			LocalMCPCluster: localMCPCluster,
 			PodNamespace:    podNamespace,

@@ -1,0 +1,147 @@
+---
+# Namespace for the service provider
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: service-provider-ksm
+---
+# ServiceAccount for the service provider
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: service-provider-ksm
+  namespace: service-provider-ksm
+---
+# ClusterRole with permissions to manage all resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: service-provider-ksm
+rules:
+  # CRD management
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Our custom resources
+  - apiGroups: ["ksm.services.openmcp.cloud"]
+    resources: ["kubestatemetrics", "kubestatemetricsconfigs", "providerconfigs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["ksm.services.openmcp.cloud"]
+    resources: ["kubestatemetrics/status", "kubestatemetricsconfigs/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["ksm.services.openmcp.cloud"]
+    resources: ["kubestatemetrics/finalizers", "kubestatemetricsconfigs/finalizers"]
+    verbs: ["update"]
+  # Core resources for kube-state-metrics deployment
+  - apiGroups: [""]
+    resources: ["namespaces", "serviceaccounts", "services", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # RBAC management - need escalate to create ClusterRoles with more permissions
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "escalate", "bind"]
+---
+# ClusterRoleBinding to grant permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: service-provider-ksm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: service-provider-ksm
+subjects:
+  - kind: ServiceAccount
+    name: service-provider-ksm
+    namespace: service-provider-ksm
+---
+# Job to install CRDs (init job)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: service-provider-ksm-init
+  namespace: service-provider-ksm
+spec:
+  template:
+    metadata:
+      labels:
+        app: service-provider-ksm-init
+    spec:
+      serviceAccountName: service-provider-ksm
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: service-provider-ksm:test
+          command: ["/service-provider-ksm"]
+          args: ["init"]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+---
+# Deployment for the service provider controller
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-provider-ksm
+  namespace: service-provider-ksm
+  labels:
+    app: service-provider-ksm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-provider-ksm
+  template:
+    metadata:
+      labels:
+        app: service-provider-ksm
+    spec:
+      serviceAccountName: service-provider-ksm
+      containers:
+        - name: controller
+          image: service-provider-ksm:test
+          command: ["/service-provider-ksm"]
+          args: ["run", "--provider-name=kubestatemetrics"]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - containerPort: 8081
+              name: health
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
