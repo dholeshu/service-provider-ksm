@@ -29,3 +29,4 @@ go.work
 *.html
 
 /tmp
+/test/setup/

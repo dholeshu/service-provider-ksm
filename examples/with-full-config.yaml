@@ -1,0 +1,65 @@
+# Example: KubeStateMetricsConfig with both custom and standard config
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetricsConfig
+metadata:
+  name: full-config
+  namespace: monitoring
+spec:
+  # Configuration for custom resources
+  customResourceStateConfig: |
+    kind: CustomResourceStateMetrics
+    spec:
+      resources:
+        - groupVersionKind:
+            group: account.btp.sap.crossplane.io
+            version: "*"
+            kind: "*"
+          labelsFromPath:
+            name: [metadata, name]
+            namespace: [metadata, namespace]
+          metricNamePrefix: crossplane_btp
+          metrics:
+            - name: deployment_replicas
+              help: "Number of desired replicas"
+              each:
+                type: Gauge
+                gauge:
+                  path: [spec, replicas]
+
+  # Standard kube-state-metrics configuration (for non-custom resources)
+  # When this is present, both custom and standard resources will be monitored
+  config: |
+    # Resource types to monitor (standard Kubernetes resources)
+    # See: https://github.com/kubernetes/kube-state-metrics/blob/main/docs/README.md
+    resources:
+      - deployments
+      - pods
+      - nodes
+      - services
+      - configmaps
+
+  # Additional configuration files
+  additionalConfigs:
+    prometheus-rules.yaml: |
+      groups:
+        - name: kube-state-metrics
+          rules:
+            - alert: KSMDown
+              expr: up{job="kube-state-metrics"} == 0
+              for: 5m
+---
+# KubeStateMetrics using the full config
+# Note: customResourceStateOnly is automatically set to false when standard config is present
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetrics
+metadata:
+  name: full-ksm
+  namespace: default
+spec:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+  namespace: monitoring
+  replicas: 2
+
+  configRef:
+    name: full-config
+    namespace: monitoring

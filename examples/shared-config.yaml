@@ -1,0 +1,59 @@
+# Example: Reusing the same config across multiple KSM deployments
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetricsConfig
+metadata:
+  name: shared-config
+  namespace: observability
+spec:
+  customResourceStateConfig: |
+    kind: CustomResourceStateMetrics
+    spec:
+      resources:
+        - groupVersionKind:
+            group: account.btp.sap.crossplane.io
+            version: "*"
+            kind: "*"
+          metricNamePrefix: crossplane_btp
+          metrics:
+            - name: resource_generation
+              help: "Resource generation"
+              each:
+                type: Gauge
+                gauge:
+                  path: [metadata, generation]
+---
+# First KSM deployment for cluster 1
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetrics
+metadata:
+  name: ksm-cluster1
+  namespace: default
+spec:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+  namespace: observability
+  customResourceStateOnly: true
+  configRef:
+    name: shared-config
+    namespace: observability
+---
+# Second KSM deployment for cluster 2 (same config, different deployment)
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetrics
+metadata:
+  name: ksm-cluster2
+  namespace: default
+spec:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+  namespace: observability
+  customResourceStateOnly: true
+  configRef:
+    name: shared-config
+    namespace: observability
+  # Different resource limits for this deployment
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi

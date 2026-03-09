@@ -1,6 +1,6 @@
-apiVersion: foo.services.openmcp.cloud/v1alpha1
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: ProviderConfig
 metadata:
-  name: default
+  name: kubestatemetrics
 spec:
   pollInterval: 1m

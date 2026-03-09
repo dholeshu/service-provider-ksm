@@ -1,0 +1,38 @@
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetricsConfig
+metadata:
+  name: test-config
+  namespace: default
+spec:
+  customResourceStateConfig: |
+    kind: CustomResourceStateMetrics
+    spec:
+      resources:
+        - groupVersionKind:
+            group: account.btp.sap.crossplane.io
+            version: "*"
+            kind: "*"
+          labelsFromPath:
+            name: [metadata, name]
+            namespace: [metadata, namespace]
+          metricNamePrefix: crossplane_btp
+          metrics:
+            - name: resource_generation
+              help: "Resource generation"
+              each:
+                type: Gauge
+                gauge:
+                  path: [metadata, generation]
+---
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetrics
+metadata:
+  name: test-mcp
+spec:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+  namespace: observability
+  replicas: 1
+  customResourceStateOnly: true
+  configRef:
+    name: test-config
+
