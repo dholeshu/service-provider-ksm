@@ -1,0 +1,46 @@
+# Example KubeStateMetrics with ConfigMap
+# IMPORTANT: The name MUST match the ManagedControlPlaneV2 name to target that MCP
+---
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetricsConfig
+metadata:
+  name: monitoring-cluster  # ← MUST match ManagedControlPlaneV2 name!
+  namespace: default
+spec:
+  targetNamespace: observability
+  customResourceStateConfig: |
+    spec:
+      resources:
+        - groupVersionKind:
+            group: "apps"
+            version: "v1"
+            kind: "Deployment"
+          metricNamePrefix: kube_deployment
+          metrics:
+            - name: "replicas"
+              help: "Number of replicas"
+              each:
+                type: Gauge
+                gauge:
+                  path: [spec, replicas]
+---
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetrics
+metadata:
+  name: monitoring-cluster  # ← MUST match ManagedControlPlaneV2 name!
+  namespace: default
+spec:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.0
+  replicas: 1
+  namespace: observability
+  configRef:
+    name: monitoring-cluster  # References the config above
+  args:
+    - --resources=deployments,pods,nodes
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi

@@ -21,72 +21,222 @@ import (
 	"fmt"
 	"time"
 
+	rbacv1 "k8s.io/api/rbac/v1"
+
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	apiv1alpha1 "github.com/dholeshu/service-provider-ksm/api/v1alpha1"
-	spruntime "github.com/dholeshu/service-provider-ksm/pkg/runtime"
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
+	commonapi "github.com/openmcp-project/openmcp-operator/api/common"
+	"github.com/openmcp-project/openmcp-operator/lib/clusteraccess"
+
+	v1alpha1 "github.com/dholeshu/service-provider-ksm/api/v1alpha1"
+	"github.com/dholeshu/service-provider-ksm/internal/scheme"
 )
 
 const (
 	configMapSuffix = "-ksm-config"
+	defaultTargetNs = "observability"
+)
+
+var (
+	ConfigMapFinalizer = v1alpha1.GroupVersion.Group + "/config-finalizer"
 )
 
 // KubeStateMetricsConfigReconciler reconciles a KubeStateMetricsConfig object
 type KubeStateMetricsConfigReconciler struct {
-	// LocalMCPCluster is the local MCP cluster where this controller runs, watches resources, and creates ConfigMaps
-	LocalMCPCluster *clusters.Cluster
-	// PodNamespace is the namespace where this controller is deployed in
-	PodNamespace string
+	PlatformCluster         *clusters.Cluster
+	OnboardingCluster       *clusters.Cluster
+	ClusterAccessReconciler clusteraccess.Reconciler
+	Recorder                record.EventRecorder
+	RecieveEventsChannel    <-chan event.GenericEvent
 }
 
-// CreateOrUpdate is called on every add or update event
-func (r *KubeStateMetricsConfigReconciler) CreateOrUpdate(ctx context.Context, configObj *apiv1alpha1.KubeStateMetricsConfig, _ *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
-	l := logf.FromContext(ctx)
-	spruntime.StatusProgressing(configObj, "Reconciling", "Reconciling KubeStateMetricsConfig")
+// SetupWithManager sets up the controller with the Manager.
+func (r *KubeStateMetricsConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.ClusterAccessReconciler = clusteraccess.NewClusterAccessReconciler(
+		r.PlatformCluster.Client(),
+		"ksm.services.openmcp.cloud",
+	)
+	r.ClusterAccessReconciler.
+		WithMCPScheme(scheme.MCP).
+		WithRetryInterval(10 * time.Second).
+		WithMCPPermissions(getConfigMCPPermissions()).
+		WithMCPRoleRefs(getConfigMCPRoleRefs()).
+		SkipWorkloadCluster()
+
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.KubeStateMetricsConfig{}).
+		Complete(r)
+}
+
+// Reconcile reconciles the KubeStateMetricsConfig instance.
+func (r *KubeStateMetricsConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	// Fetch the KubeStateMetricsConfig instance from the onboarding cluster
+	config := &v1alpha1.KubeStateMetricsConfig{}
+	if err := r.OnboardingCluster.Client().Get(ctx, req.NamespacedName, config); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "Failed to get KubeStateMetricsConfig")
+		return ctrl.Result{}, err
+	}
+
+	// Handle deletion
+	if !config.DeletionTimestamp.IsZero() {
+		return r.handleDelete(ctx, req, config)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(config, ConfigMapFinalizer) {
+		controllerutil.AddFinalizer(config, ConfigMapFinalizer)
+		if err := r.OnboardingCluster.Client().Update(ctx, config); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Update status to Progressing
+	oldConfig := config.DeepCopy()
+	config.Status.Phase = "Progressing"
+	config.Status.ObservedGeneration = config.Generation
+
+	// Setup cluster access (references existing ClusterRequest by name)
+	mcpCluster, result, err := r.setupClusterAccess(ctx, req)
+	if err != nil {
+		log.Error(err, "Failed to setup cluster access")
+		config.Status.Phase = "Error"
+		r.OnboardingCluster.Client().Status().Patch(ctx, config, client.MergeFrom(oldConfig))
+		return ctrl.Result{}, err
+	}
+	if result != nil {
+		// Requeue to wait for cluster access
+		return *result, nil
+	}
+
+	// Create ConfigMap on MCP cluster
+	if err := r.createOrUpdateConfigMap(ctx, config, mcpCluster); err != nil {
+		log.Error(err, "Failed to create ConfigMap")
+		config.Status.Phase = "Error"
+		r.OnboardingCluster.Client().Status().Patch(ctx, config, client.MergeFrom(oldConfig))
+		return ctrl.Result{}, err
+	}
+
+	// Update status to Ready
+	config.Status.Phase = "Ready"
+	if err := r.OnboardingCluster.Client().Status().Patch(ctx, config, client.MergeFrom(oldConfig)); err != nil {
+		log.Error(err, "Failed to update status")
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+func (r *KubeStateMetricsConfigReconciler) setupClusterAccess(ctx context.Context, req ctrl.Request) (*clusters.Cluster, *ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	// Reconcile cluster access (finds existing ClusterRequest by name)
+	res, err := r.ClusterAccessReconciler.Reconcile(ctx, req)
+	if err != nil {
+		log.Error(err, "failed to reconcile cluster access for KubeStateMetricsConfig instance")
+		return nil, nil, err
+	}
+
+	// AccessRequest was created but not yet granted
+	if res.RequeueAfter > 0 {
+		result := ctrl.Result{RequeueAfter: res.RequeueAfter}
+		return nil, &result, nil
+	}
+
+	// Get MCP cluster client
+	mcpCluster, err := r.ClusterAccessReconciler.MCPCluster(ctx, req)
+	if err != nil {
+		log.Error(err, "failed to get MCP cluster for KubeStateMetricsConfig instance")
+		result := ctrl.Result{RequeueAfter: 30 * time.Second}
+		return nil, &result, nil
+	}
+
+	return mcpCluster, nil, nil
+}
+
+func (r *KubeStateMetricsConfigReconciler) handleDelete(ctx context.Context, req ctrl.Request, config *v1alpha1.KubeStateMetricsConfig) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(config, ConfigMapFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	// Get MCP cluster access
+	mcpCluster, result, err := r.setupClusterAccess(ctx, req)
+	if err != nil {
+		log.Error(err, "Failed to get MCP cluster access for cleanup")
+		// Continue with finalizer removal and cluster access cleanup
+	} else if result == nil {
+		// Only cleanup if we got cluster access
+		if err := r.deleteConfigMap(ctx, config, mcpCluster); err != nil {
+			log.Error(err, "Failed to delete ConfigMap")
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Reconcile delete for cluster access
+	res, err := r.ClusterAccessReconciler.ReconcileDelete(ctx, req)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if res.RequeueAfter > 0 {
+		return res, nil
+	}
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(config, ConfigMapFinalizer)
+	if err := r.OnboardingCluster.Client().Update(ctx, config); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+func (r *KubeStateMetricsConfigReconciler) createOrUpdateConfigMap(ctx context.Context, config *v1alpha1.KubeStateMetricsConfig, mcpCluster *clusters.Cluster) error {
+	log := log.FromContext(ctx)
 
 	// Determine ConfigMap name and namespace
-	configMapName := configObj.Name + configMapSuffix
-
-	// Use TargetNamespace from spec, default to "observability" if not specified
-	configMapNamespace := configObj.Spec.TargetNamespace
+	configMapName := config.Name + configMapSuffix
+	configMapNamespace := config.Spec.TargetNamespace
 	if configMapNamespace == "" {
-		configMapNamespace = "observability"
+		configMapNamespace = defaultTargetNs
 	}
 
 	// Create namespace if it doesn't exist
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: configMapNamespace,
-		},
-	}
-	if _, err := ctrl.CreateOrUpdate(ctx, clusters.MCPCluster.Client(), ns, func() error {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: configMapNamespace}}
+	if _, err := ctrl.CreateOrUpdate(ctx, mcpCluster.Client(), ns, func() error {
 		return nil
 	}); err != nil {
-		l.Error(err, "failed to create namespace")
-		spruntime.StatusProgressing(configObj, "NamespaceCreationFailed", err.Error())
-		return ctrl.Result{}, err
+		return err
 	}
 
 	// Build ConfigMap data
 	data := make(map[string]string)
 
-	if configObj.Spec.CustomResourceStateConfig != "" {
-		data["custom-resource-state-config.yaml"] = configObj.Spec.CustomResourceStateConfig
+	if config.Spec.CustomResourceStateConfig != "" {
+		data["custom-resource-state-config.yaml"] = config.Spec.CustomResourceStateConfig
 	}
 
-	if configObj.Spec.Config != "" {
-		data["config.yaml"] = configObj.Spec.Config
+	if config.Spec.Config != "" {
+		data["config.yaml"] = config.Spec.Config
 	}
 
 	// Add additional configs
-	for filename, content := range configObj.Spec.AdditionalConfigs {
+	for filename, content := range config.Spec.AdditionalConfigs {
 		data[filename] = content
 	}
 
@@ -98,7 +248,7 @@ func (r *KubeStateMetricsConfigReconciler) CreateOrUpdate(ctx context.Context, c
 		},
 	}
 
-	if _, err := ctrl.CreateOrUpdate(ctx, clusters.MCPCluster.Client(), configMap, func() error {
+	if _, err := ctrl.CreateOrUpdate(ctx, mcpCluster.Client(), configMap, func() error {
 		configMap.Labels = map[string]string{
 			"app.kubernetes.io/name":       "kube-state-metrics",
 			"app.kubernetes.io/component":  "config",
@@ -107,34 +257,24 @@ func (r *KubeStateMetricsConfigReconciler) CreateOrUpdate(ctx context.Context, c
 		configMap.Data = data
 		return nil
 	}); err != nil {
-		l.Error(err, "failed to create or update ConfigMap")
-		spruntime.StatusProgressing(configObj, "ConfigMapFailed", err.Error())
-		return ctrl.Result{}, err
+		return err
 	}
 
-	// Update status
-	configObj.Status.ConfigMapName = configMapName
-	configObj.Status.ConfigMapNamespace = configMapNamespace
-	spruntime.StatusReady(configObj)
+	// Update status with ConfigMap details
+	config.Status.ConfigMapName = configMapName
+	config.Status.ConfigMapNamespace = configMapNamespace
 
-	l.Info("KubeStateMetricsConfig reconciled successfully", "configMap", fmt.Sprintf("%s/%s", configMapNamespace, configMapName))
-	return ctrl.Result{}, nil
+	log.Info("ConfigMap created successfully", "configMap", fmt.Sprintf("%s/%s", configMapNamespace, configMapName))
+	return nil
 }
 
-// Delete is called on every delete event
-func (r *KubeStateMetricsConfigReconciler) Delete(ctx context.Context, configObj *apiv1alpha1.KubeStateMetricsConfig, _ *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
-	l := logf.FromContext(ctx)
-	spruntime.StatusTerminating(configObj)
-
-	configMapName := configObj.Name + configMapSuffix
-
-	// Use TargetNamespace from spec, default to "observability" if not specified
-	configMapNamespace := configObj.Spec.TargetNamespace
+func (r *KubeStateMetricsConfigReconciler) deleteConfigMap(ctx context.Context, config *v1alpha1.KubeStateMetricsConfig, mcpCluster *clusters.Cluster) error {
+	configMapName := config.Name + configMapSuffix
+	configMapNamespace := config.Spec.TargetNamespace
 	if configMapNamespace == "" {
-		configMapNamespace = "observability"
+		configMapNamespace = defaultTargetNs
 	}
 
-	// Delete ConfigMap
 	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      configMapName,
@@ -142,22 +282,32 @@ func (r *KubeStateMetricsConfigReconciler) Delete(ctx context.Context, configObj
 		},
 	}
 
-	if err := clusters.MCPCluster.Client().Delete(ctx, configMap); err != nil {
-		if !errors.IsNotFound(err) {
-			l.Error(err, "failed to delete ConfigMap")
-			return ctrl.Result{}, err
-		}
+	if err := mcpCluster.Client().Delete(ctx, configMap); err != nil && !apierrors.IsNotFound(err) {
+		return err
 	}
 
-	// Check if ConfigMap still exists
-	if err := clusters.MCPCluster.Client().Get(ctx, client.ObjectKeyFromObject(configMap), configMap); err != nil {
-		if errors.IsNotFound(err) {
-			// ConfigMap is deleted
-			return reconcile.Result{}, nil
-		}
-		return ctrl.Result{}, err
-	}
+	return nil
+}
 
-	// ConfigMap still exists, requeue
-	return ctrl.Result{RequeueAfter: time.Second * 10}, nil
+func getConfigMCPPermissions() []clustersv1alpha1.PermissionsRequest {
+	return []clustersv1alpha1.PermissionsRequest{
+		{
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: []string{"namespaces", "configmaps"},
+					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				},
+			},
+		},
+	}
+}
+
+func getConfigMCPRoleRefs() []commonapi.RoleRef {
+	return []commonapi.RoleRef{
+		{
+			Kind: "ClusterRole",
+			Name: "cluster-admin",
+		},
+	}
 }
