@@ -8,8 +8,7 @@ A Service Provider for managing the lifecycle of [kube-state-metrics](https://gi
 
 This service provider automates deployment and management of kube-state-metrics instances across OpenMCP clusters with:
 
-- **SAP Internal Registry**: Uses `crimson-prod.common.repositories.cloud.sap` exclusively
-- **Version-Based Deployment**: Simple version specification instead of full image paths
+- **Flexible Image Configuration**: Support for any container registry (public, private, SAP internal)
 - **Production-Ready**: Zero-downtime updates, PodDisruptionBudget, optimized health probes
 - **Configuration Management**: Separate CRD for reusable configurations
 - **Full Lifecycle**: Automated create, update, and delete operations
@@ -37,14 +36,15 @@ EOF
 
 ```shell
 # On each MCP cluster where kube-state-metrics will be deployed
-kubectl create secret docker-registry artifactory-readonly-docker \
-  --docker-server=crimson-prod.common.repositories.cloud.sap \
+# Example for private registry
+kubectl create secret docker-registry my-registry-secret \
+  --docker-server=<your-registry> \
   --docker-username=<username> \
   --docker-password=<token> \
   -n observability
 ```
 
-### 3. Create Configuration
+### 3. Create Configuration (Optional)
 
 ```yaml
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
@@ -80,15 +80,22 @@ metadata:
   name: my-mcp-cluster  # Must match ManagedControlPlane name
   namespace: default
 spec:
-  version: v2.18.0  # Only specify version, not full image path
+  # Full image path including registry, repository, and tag
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+
   replicas: 2  # Recommended for HA
   namespace: observability
+
   configRef:
     name: my-config
+
+  # Image pull secrets (if using private registry)
   imagePullSecrets:
-    - name: artifactory-readonly-docker
+    - name: my-registry-secret
+
   args:
     - --resources=deployments,pods,nodes,services
+
   resources:
     requests:
       cpu: 100m
@@ -115,12 +122,27 @@ kubectl run curl-test --image=curlimages/curl:latest --rm -i --restart=Never \
 
 ## Features
 
-### SAP Internal Registry
+### Flexible Image Configuration
 
-- **Hardcoded Registry**: `crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics`
-- **Version Only**: Users specify `version: v2.18.0` instead of full image path
-- **Validation**: Enforces version pattern `^v\d+\.\d+\.\d+$`
-- **Security**: Ensures all images come from approved SAP registry
+- **Any Registry**: Use public registries (registry.k8s.io, docker.io), private registries, or internal registries
+- **Full Control**: Specify complete image path including registry, repository, and tag
+- **Version Pinning**: Pin to specific versions or use image digests
+- **Custom Builds**: Support for custom kube-state-metrics builds
+
+**Examples:**
+```yaml
+# Public registry
+image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+
+# Docker Hub
+image: docker.io/kubernetes/kube-state-metrics:v2.18.0
+
+# Private/corporate registry
+image: my-registry.company.com/kube-state-metrics/kube-state-metrics:v2.18.0
+
+# Image digest for immutability
+image: registry.k8s.io/kube-state-metrics/kube-state-metrics@sha256:abc123...
+```
 
 ### Production-Ready Deployment
 
@@ -174,8 +196,8 @@ kubectl run curl-test --image=curlimages/curl:latest --rm -i --restart=Never \
 │  ├─ ServiceAccount: kube-state-metrics                       │
 │  ├─ ClusterRole: kube-state-metrics (read-only)              │
 │  ├─ ClusterRoleBinding: kube-state-metrics                   │
-│  ├─ ConfigMap: {name}-ksm-config                             │
-│  ├─ Deployment: kube-state-metrics (with SAP registry image) │
+│  ├─ ConfigMap: {name}-ksm-config (if config specified)       │
+│  ├─ Deployment: kube-state-metrics                           │
 │  ├─ Service: kube-state-metrics (headless)                   │
 │  └─ PodDisruptionBudget: kube-state-metrics                  │
 └──────────────────────────────────────────────────────────────┘
@@ -199,7 +221,7 @@ kind: KubeStateMetrics
 metadata:
   name: prod-mcp-01  # Must match MCP name
 spec:
-  version: v2.18.0
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
 ```
 
 This naming convention ensures resources are deployed to the correct MCP cluster.
@@ -214,11 +236,11 @@ Manages kube-state-metrics deployment lifecycle.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `version` | string | Yes | - | KSM version (e.g., `v2.18.0`). Pattern: `^v\d+\.\d+\.\d+$` |
+| `image` | string | Yes | - | Full image path (e.g., `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0`) |
 | `namespace` | string | No | `observability` | Target namespace on MCP cluster |
 | `replicas` | int32 | No | `1` | Number of replicas (2+ recommended for HA) |
 | `configRef` | object | No | - | Reference to KubeStateMetricsConfig |
-| `imagePullSecrets` | []LocalObjectReference | No | - | Image pull secrets for SAP registry |
+| `imagePullSecrets` | []LocalObjectReference | No | - | Image pull secrets for private registries |
 | `resources` | ResourceRequirements | No | - | CPU/memory requests and limits |
 | `args` | []string | No | - | Additional command-line arguments |
 | `nodeSelector` | map[string]string | No | - | Node selector for pod scheduling |
@@ -242,13 +264,13 @@ metadata:
   name: prod-cluster
   namespace: default
 spec:
-  version: v2.18.0
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
   replicas: 2
   namespace: observability
   configRef:
     name: prod-config
   imagePullSecrets:
-    - name: artifactory-readonly-docker
+    - name: my-registry-secret
   resources:
     requests:
       cpu: 100m
@@ -326,7 +348,6 @@ Global configuration for the service provider.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `pollInterval` | duration | `1m` | Reconciliation poll interval |
-| `defaultVersion` | string | `v2.18.0` | Default KSM version when not specified |
 
 #### Example
 
@@ -337,7 +358,6 @@ metadata:
   name: default
 spec:
   pollInterval: 1m
-  defaultVersion: v2.18.0
 ```
 
 ## Production Deployment Guide
@@ -352,7 +372,7 @@ kind: KubeStateMetrics
 metadata:
   name: prod-mcp
 spec:
-  version: v2.18.0
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
   replicas: 3  # Multiple replicas for HA
   namespace: observability
 
@@ -383,7 +403,7 @@ spec:
 - ✅ Configure PodDisruptionBudget (automatically created)
 - ✅ Set appropriate resource requests/limits
 - ✅ Use anti-affinity to spread across nodes
-- ✅ Configure imagePullSecret for SAP registry
+- ✅ Configure imagePullSecret for private registries
 - ✅ Monitor deployment status and metrics
 - ✅ Set up alerts for pod failures
 
@@ -407,8 +427,8 @@ For single-replica deployments:
 To upgrade kube-state-metrics version:
 
 ```shell
-# Update the version field
-kubectl patch kubestatemetrics prod-mcp --type=merge -p '{"spec":{"version":"v2.19.0"}}'
+# Update the image field
+kubectl patch kubestatemetrics prod-mcp --type=merge -p '{"spec":{"image":"registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.0"}}'
 
 # Watch the rollout
 kubectl get kubestatemetrics prod-mcp -w
@@ -490,17 +510,17 @@ task generate:format     # Code formatting
 
 **Symptom**: Pod stuck in `ImagePullBackOff` or `ErrImagePull`
 
-**Solution**: Ensure imagePullSecret exists:
+**Solution**: Ensure imagePullSecret exists (if using private registry):
 
 ```shell
 # Check secret exists on MCP cluster
-kubectl get secret artifactory-readonly-docker -n observability --context <mcp-context>
+kubectl get secret my-registry-secret -n observability --context <mcp-context>
 
 # Verify it's referenced in KubeStateMetrics spec
 kubectl get kubestatemetrics <name> -o jsonpath='{.spec.imagePullSecrets}'
 
 # Test credentials manually
-docker login crimson-prod.common.repositories.cloud.sap -u <username>
+docker login <your-registry> -u <username>
 ```
 
 ### Resource Stuck in Progressing
@@ -561,6 +581,12 @@ kubectl get managedcontrolplane -A --context kind-platform
 kubectl get kubestatemetrics -A
 ```
 
+## ManagedControlPlane Integration
+
+For automatic KubeStateMetrics deployment via ManagedControlPlane spec, additional changes are required in mcp-operator. See [REQUIRED_CHANGES_MCP_OPERATOR.md](REQUIRED_CHANGES_MCP_OPERATOR.md) for the complete specification.
+
+**Current Status**: Direct resource creation is fully supported. ManagedControlPlane integration requires mcp-operator changes.
+
 ## Runtime Configuration
 
 The service provider supports these flags:
@@ -579,8 +605,6 @@ Run `--help` for complete list.
 ## Contributing
 
 This project is open to feature requests, bug reports, and contributions via [GitHub issues](https://github.com/dholeshu/service-provider-ksm/issues).
-
-For contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security
 
