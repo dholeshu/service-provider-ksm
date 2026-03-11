@@ -35,11 +35,12 @@ type ConfigReference struct {
 
 // KubeStateMetricsSpec defines the desired state of KubeStateMetrics
 type KubeStateMetricsSpec struct {
-	// Image specifies the container image to use for kube-state-metrics
-	// Should include the full image path with tag (e.g., "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0")
+	// Version specifies the kube-state-metrics version to deploy
+	// The image will be pulled from: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:<version>
 	// +kubebuilder:validation:Required
-	// +kubebuilder:example="registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0"
-	Image string `json:"image"`
+	// +kubebuilder:validation:Pattern=`^v\d+\.\d+\.\d+$`
+	// +kubebuilder:example="v2.18.0"
+	Version string `json:"version"`
 
 	// Namespace specifies the target namespace for kube-state-metrics deployment
 	// +kubebuilder:default="observability"

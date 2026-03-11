@@ -41,10 +41,16 @@ spec:
           spec:
             description: spec defines the desired state of ProviderConfig
             properties:
+              defaultVersion:
+                default: v2.18.0
+                description: DefaultVersion specifies the default kube-state-metrics
+                  version to use when not specified in KubeStateMetrics resource
+                pattern: ^v\d+\.\d+\.\d+$
+                type: string
               pollInterval:
                 default: 1m
-                description: foo is an example field of ProviderConfig. Edit providerconfig_types.go
-                  to remove/update
+                description: PollInterval defines how often the controller should
+                  poll for changes
                 format: duration
                 type: string
             type: object

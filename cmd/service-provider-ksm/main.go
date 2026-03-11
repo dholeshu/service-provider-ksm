@@ -21,145 +21,215 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
-	flag "github.com/spf13/pflag"
+	rbacv1 "k8s.io/api/rbac/v1"
 
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
-	"github.com/openmcp-project/controller-utils/pkg/clusters"
 	crdutil "github.com/openmcp-project/controller-utils/pkg/crds"
-	"github.com/openmcp-project/controller-utils/pkg/logging"
-	commonapi "github.com/openmcp-project/openmcp-operator/api/common"
-	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	openmcpconst "github.com/openmcp-project/openmcp-operator/api/constants"
-
-	"github.com/dholeshu/service-provider-ksm/api/crds"
-	apiextensionv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
+
+	v1alpha1 "github.com/dholeshu/service-provider-ksm/api/v1alpha1"
+
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	spruntime "github.com/dholeshu/service-provider-ksm/pkg/runtime"
+	"github.com/openmcp-project/controller-utils/pkg/clusters"
+	"github.com/openmcp-project/controller-utils/pkg/logging"
+	"github.com/openmcp-project/openmcp-operator/lib/clusteraccess"
+	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 
-	kubestatemetricssv1alpha1 "github.com/dholeshu/service-provider-ksm/api/v1alpha1"
+	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
+
+	"github.com/spf13/cobra"
+
+	"github.com/dholeshu/service-provider-ksm/api/crds"
 	"github.com/dholeshu/service-provider-ksm/internal/controller"
+	"github.com/dholeshu/service-provider-ksm/internal/scheme"
 	// +kubebuilder:scaffold:imports
 )
 
-// LocalClusterAccessProvider implements ClusterAccessProvider for standalone/local operation
-// where the service provider runs on the MCP cluster itself
-type LocalClusterAccessProvider struct {
-	localCluster *clusters.Cluster
-}
-
-// MCPCluster returns the local cluster as the MCP cluster
-func (p *LocalClusterAccessProvider) MCPCluster(ctx context.Context, request ctrl.Request) (*clusters.Cluster, error) {
-	return p.localCluster, nil
-}
-
-// MCPAccessRequest returns a dummy AccessRequest indicating access is granted
-// We don't actually use AccessRequests in standalone mode, but SPReconciler checks for them
-func (p *LocalClusterAccessProvider) MCPAccessRequest(ctx context.Context, request ctrl.Request) (*clustersv1alpha1.AccessRequest, error) {
-	// Return a minimal AccessRequest that indicates access is ready
-	return &clustersv1alpha1.AccessRequest{
-		Status: clustersv1alpha1.AccessRequestStatus{
-			Status: commonapi.Status{
-				Phase: clustersv1alpha1.AccessRequestGranted,
-			},
-		},
-	}, nil
-}
-
-// WorkloadCluster returns nil since we don't use workload clusters
-func (p *LocalClusterAccessProvider) WorkloadCluster(ctx context.Context, request ctrl.Request) (*clusters.Cluster, error) {
-	return nil, nil
-}
-
-// WorkloadAccessRequest returns nil since we don't use workload clusters
-func (p *LocalClusterAccessProvider) WorkloadAccessRequest(ctx context.Context, request ctrl.Request) (*clustersv1alpha1.AccessRequest, error) {
-	return nil, nil
-}
-
-// Reconcile is a no-op since we don't manage AccessRequests in standalone mode
-func (p *LocalClusterAccessProvider) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
-	return ctrl.Result{}, nil
-}
-
-// ReconcileDelete is a no-op since we don't manage AccessRequests in standalone mode
-func (p *LocalClusterAccessProvider) ReconcileDelete(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
-	return ctrl.Result{}, nil
-}
-
 var (
-	// When running on MCP cluster, platformScheme refers to the local MCP cluster
-	localMCPScheme = runtime.NewScheme()
-	setupLog       = ctrl.Log.WithName("setup")
+	logger logging.Logger
 )
 
-func init() {
-	// +kubebuilder:scaffold:scheme
-	initLocalMCPScheme()
+func main() {
+	rootCmd := &cobra.Command{
+		Use:   "service-provider-ksm",
+		Short: "KubeStateMetrics service provider",
+	}
+
+	// run command
+	runCmd := &cobra.Command{
+		Use:   "run",
+		Short: "Run the service-provider-ksm",
+		RunE:  runCommand,
+	}
+	// add common flags to run command
+	addCommonFlags(runCmd)
+	// add specific flags to run command
+	addMetricsFlags(runCmd)
+	addWebhookFlags(runCmd)
+	addManagerFlags(runCmd)
+
+	// init command
+	initCmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize the service-provider-ksm",
+		RunE:  initCommand,
+	}
+	// add common flags to init command
+	addCommonFlags(initCmd)
+
+	rootCmd.AddCommand(runCmd, initCmd)
+
+	var err error
+	logger, err = logging.GetLogger()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to get logger: %v\n", err)
+		os.Exit(1)
+	}
+
+	ctrl.SetLogger(logger.Logr())
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
-func initLocalMCPScheme() {
-	// MCP cluster needs all these types
-	utilruntime.Must(clientgoscheme.AddToScheme(localMCPScheme))
-	utilruntime.Must(apiextensionv1.AddToScheme(localMCPScheme))
-	utilruntime.Must(kubestatemetricssv1alpha1.AddToScheme(localMCPScheme))
-	// Note: We don't need clustersv1alpha1 or providerv1alpha1 on MCP cluster
-	// Those are platform-only resources
+func addCommonFlags(cmd *cobra.Command) {
+	cmd.Flags().String("provider-name", "", "The name of the provider.")
+	cmd.Flags().String("verbosity", "INFO", "The verbosity level of the provider.")
+	cmd.Flags().String("environment", "", "The logical environment the provider is running in.")
+}
+
+func addMetricsFlags(cmd *cobra.Command) {
+	cmd.Flags().String("metrics-bind-address", "0", "The address the metrics endpoint binds to. Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
+	cmd.Flags().Bool("metrics-secure", true, "If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
+	cmd.Flags().String("metrics-cert-path", "", "The directory that contains the metrics server certificate.")
+	cmd.Flags().String("metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
+	cmd.Flags().String("metrics-cert-key", "tls.key", "The name of the metrics server key file.")
+}
+
+func addWebhookFlags(cmd *cobra.Command) {
+	cmd.Flags().String("webhook-cert-path", "", "The directory that contains the webhook certificate.")
+	cmd.Flags().String("webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
+	cmd.Flags().String("webhook-cert-key", "tls.key", "The name of the webhook key file.")
+}
+
+func addManagerFlags(cmd *cobra.Command) {
+	cmd.Flags().String("health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	cmd.Flags().Bool("leader-elect", false, "Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
+	cmd.Flags().Bool("enable-http2", false, "If set, HTTP/2 will be enabled for the metrics and webhook servers")
+}
+
+// initializePlatformCluster initializes the platform cluster with the necessary REST config and client.
+func initializePlatformCluster() (*clusters.Cluster, error) {
+	platformCluster := clusters.New("platform")
+
+	platformCluster = platformCluster.WithRESTConfig(ctrl.GetConfigOrDie())
+
+	if err := platformCluster.InitializeClient(scheme.Platform); err != nil {
+		return nil, fmt.Errorf("failed to initialize client for platform cluster: %w", err)
+	}
+	return platformCluster, nil
+}
+
+func initCommand(cmd *cobra.Command, _ []string) error {
+	providerName, err := cmd.Flags().GetString("provider-name")
+	if err != nil {
+		return fmt.Errorf("required flag --provider-name not set")
+	}
+
+	platformCluster, err := initializePlatformCluster()
+	if err != nil {
+		logger.Error(err, "Failed to initialize platform cluster")
+		return err
+	}
+
+	runInit(platformCluster, providerName)
+	return nil
+}
+
+// runInit installs the necessary CRDs on each cluster
+func runInit(platformCluster *clusters.Cluster, providerName string) {
+	ctx := context.Background()
+
+	logger.Info("Running init command")
+
+	clusterAccessManager := clusteraccess.NewClusterAccessManager(platformCluster.Client(), "ksm.services.openmcp.cloud", os.Getenv("POD_NAMESPACE"))
+	clusterAccessManager.WithLogger(&logger).
+		WithInterval(10 * time.Second).
+		WithTimeout(30 * time.Minute)
+
+	onboardingCluster, err := clusterAccessManager.CreateAndWaitForCluster(ctx, "onboarding-init", clustersv1alpha1.PURPOSE_ONBOARDING,
+		scheme.Onboarding, []clustersv1alpha1.PermissionsRequest{
+			{
+				Rules: []rbacv1.PolicyRule{
+					{
+						APIGroups: []string{"*"},
+						Resources: []string{"*"},
+						Verbs:     []string{"*"},
+					},
+				},
+			},
+		})
+
+	if err != nil {
+		logger.Error(err, "Failed to create and wait for onboarding cluster")
+		os.Exit(1)
+	}
+
+	crdManager := crdutil.NewCRDManager(openmcpconst.ClusterLabel, crds.CRDs)
+
+	crdManager.AddCRDLabelToClusterMapping(clustersv1alpha1.PURPOSE_PLATFORM, platformCluster)
+	crdManager.AddCRDLabelToClusterMapping(clustersv1alpha1.PURPOSE_ONBOARDING, onboardingCluster)
+
+	if err := crdManager.CreateOrUpdateCRDs(ctx, &logger); err != nil {
+		logger.Error(err, "Failed to create or update CRDs")
+		os.Exit(1)
+	}
+
+	ksmGVK := metav1.GroupVersionKind{
+		Group:   v1alpha1.GroupVersion.Group,
+		Version: v1alpha1.GroupVersion.Version,
+		Kind:    "KubeStateMetrics",
+	}
+	ksmConfigGVK := metav1.GroupVersionKind{
+		Group:   v1alpha1.GroupVersion.Group,
+		Version: v1alpha1.GroupVersion.Version,
+		Kind:    "KubeStateMetricsConfig",
+	}
+	logger.Info("Registering service-provider-ksm GVKs at the ServiceProvider object")
+	if err := libutils.RegisterGVKsAtServiceProvider(ctx, platformCluster.Client(), providerName, ksmGVK, ksmConfigGVK); err != nil {
+		logger.Error(err, "Failed to register service provider GVKs")
+		os.Exit(1)
+	}
+
+	logger.Info("Init completed successfully")
 }
 
 // nolint:gocyclo
-func main() {
-	var command string
-	var environment, providerName string
-	var metricsAddr string
-	var metricsCertPath, metricsCertName, metricsCertKey string
-	var webhookCertPath, webhookCertName, webhookCertKey string
-	var enableLeaderElection bool
-	var probeAddr string
-	var secureMetrics bool
-	var enableHTTP2 bool
+func runCommand(cmd *cobra.Command, _ []string) error {
+	metricsAddr, _ := cmd.Flags().GetString("metrics-bind-address")
+	metricsCertPath, _ := cmd.Flags().GetString("metrics-cert-path")
+	metricsCertName, _ := cmd.Flags().GetString("metrics-cert-name")
+	metricsCertKey, _ := cmd.Flags().GetString("metrics-cert-key")
+	webhookCertPath, _ := cmd.Flags().GetString("webhook-cert-path")
+	webhookCertName, _ := cmd.Flags().GetString("webhook-cert-name")
+	webhookCertKey, _ := cmd.Flags().GetString("webhook-cert-key")
+	enableLeaderElection, _ := cmd.Flags().GetBool("leader-elect")
+	probeAddr, _ := cmd.Flags().GetString("health-probe-bind-address")
+	secureMetrics, _ := cmd.Flags().GetBool("metrics-secure")
+	enableHTTP2, _ := cmd.Flags().GetBool("enable-http2")
+
 	var tlsOpts []func(*tls.Config)
-	flag.StringVar(&environment, "environment", "", "Name of the environment")
-	flag.StringVar(&providerName, "provider-name", "", "Name of the provider resource")
-	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
-		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
-		"Enable leader election for controller manager. "+
-			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&secureMetrics, "metrics-secure", true,
-		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
-	flag.StringVar(&webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
-	flag.StringVar(&webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
-	flag.StringVar(&webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
-	flag.StringVar(&metricsCertPath, "metrics-cert-path", "",
-		"The directory that contains the metrics server certificate.")
-	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
-	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	flag.BoolVar(&enableHTTP2, "enable-http2", false,
-		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-
-	logging.InitFlags(flag.CommandLine) // add standard logging flags
-
-	// extract command from os.Args if present to allow further flag parsing
-	if len(os.Args) > 1 {
-		command = os.Args[1] // either init or run
-		os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
-	}
-
-	flag.Parse()
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -168,7 +238,7 @@ func main() {
 	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
 	// - https://github.com/advisories/GHSA-4374-p667-p6c8
 	disableHTTP2 := func(c *tls.Config) {
-		setupLog.Info("disabling http/2")
+		logger.Info("disabling http/2")
 		c.NextProtos = []string{"http/1.1"}
 	}
 
@@ -176,22 +246,63 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
+	// Create watchers for metrics and webhooks certificates
+	var metricsCertWatcher, webhookCertWatcher *certwatcher.CertWatcher
+
 	// Initial webhook TLS options
 	webhookTLSOpts := tlsOpts
-	webhookServerOptions := webhook.Options{
-		TLSOpts: webhookTLSOpts,
+
+	platformCluster, err := initializePlatformCluster()
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+
+	clusterAccessManager := clusteraccess.NewClusterAccessManager(platformCluster.Client(), "ksm.services.openmcp.cloud", os.Getenv("POD_NAMESPACE"))
+	clusterAccessManager.WithLogger(&logger).
+		WithInterval(10 * time.Second).
+		WithTimeout(30 * time.Minute)
+
+	onboardingCluster, err := clusterAccessManager.CreateAndWaitForCluster(ctx, "onboarding-run", clustersv1alpha1.PURPOSE_ONBOARDING,
+		scheme.Onboarding, []clustersv1alpha1.PermissionsRequest{
+			{
+				Rules: []rbacv1.PolicyRule{
+					{
+						APIGroups: []string{"*"},
+						Resources: []string{"*"},
+						Verbs:     []string{"*"},
+					},
+				},
+			},
+		})
+
+	if err != nil {
+		logger.Error(err, "Failed to create and wait for onboarding cluster")
+		return err
 	}
 
 	if len(webhookCertPath) > 0 {
-		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
+		logger.Info("Initializing webhook certificate watcher using provided certificates",
 			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
 
-		webhookServerOptions.CertDir = webhookCertPath
-		webhookServerOptions.CertName = webhookCertName
-		webhookServerOptions.KeyName = webhookCertKey
+		var err error
+		webhookCertWatcher, err = certwatcher.New(
+			filepath.Join(webhookCertPath, webhookCertName),
+			filepath.Join(webhookCertPath, webhookCertKey),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to initialize webhook certificate watcher: %w", err)
+		}
+
+		webhookTLSOpts = append(webhookTLSOpts, func(config *tls.Config) {
+			config.GetCertificate = webhookCertWatcher.GetCertificate
+		})
 	}
 
-	webhookServer := webhook.NewServer(webhookServerOptions)
+	webhookServer := webhook.NewServer(webhook.Options{
+		TLSOpts: webhookTLSOpts,
+	})
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -214,174 +325,100 @@ func main() {
 	// If the certificate is not specified, controller-runtime will automatically
 	// generate self-signed certificates for the metrics server. While convenient for development and testing,
 	// this setup is not recommended for production.
-	//
-	// TODO(user): If you enable certManager, uncomment the following lines:
-	// - [METRICS-WITH-CERTS] at config/default/kustomization.yaml to generate and use certificates
-	// managed by cert-manager for the metrics server.
-	// - [PROMETHEUS-WITH-CERTS] at config/prometheus/kustomization.yaml for TLS certification.
 	if len(metricsCertPath) > 0 {
-		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
+		logger.Info("Initializing metrics certificate watcher using provided certificates",
 			"metrics-cert-path", metricsCertPath, "metrics-cert-name", metricsCertName, "metrics-cert-key", metricsCertKey)
 
-		metricsServerOptions.CertDir = metricsCertPath
-		metricsServerOptions.CertName = metricsCertName
-		metricsServerOptions.KeyName = metricsCertKey
-	}
-
-	// start sp specifics
-	log, err := logging.GetLogger()
-	if err != nil {
-		setupLog.Error(err, "Failed to get logger")
-		os.Exit(1)
-	}
-	ctrl.SetLogger(log.Logr())
-
-	// Initialize local MCP cluster (this is the cluster where the service provider is running)
-	localMCPCluster, err := initializeLocalMCPCluster()
-	if err != nil {
-		setupLog.Error(err, "Failed to initialize local MCP cluster")
-		os.Exit(1)
-	}
-
-	podNamespace := os.Getenv(openmcpconst.EnvVariablePodNamespace)
-	if podNamespace == "" {
-		setupLog.Error(fmt.Errorf("environment variable %s not set - cannot determine source namespace for secrets", openmcpconst.EnvVariablePodNamespace), "pod namespace missing")
-		os.Exit(1)
-	}
-
-	ctx := context.Background()
-	// init (job that installs CRDs on local MCP cluster)
-	if command == "init" {
-		// When running on MCP cluster, we install CRDs locally
-		setupLog.Info("Installing CRDs on local MCP cluster")
-
-		crdManager := crdutil.NewCRDManager(openmcpconst.ClusterLabel, crds.CRDs)
-		// Install KubeStateMetrics and KubeStateMetricsConfig CRDs locally
-		crdManager.AddCRDLabelToClusterMapping(clustersv1alpha1.PURPOSE_MCP, localMCPCluster)
-
-		if err := crdManager.CreateOrUpdateCRDs(ctx, &log); err != nil {
-			setupLog.Error(err, "Failed to create or update CRDs on local cluster")
-			os.Exit(1)
+		var err error
+		metricsCertWatcher, err = certwatcher.New(
+			filepath.Join(metricsCertPath, metricsCertName),
+			filepath.Join(metricsCertPath, metricsCertKey),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to initialize metrics certificate watcher: %w", err)
 		}
 
-		setupLog.Info("Successfully installed CRDs on local MCP cluster")
-		return
+		metricsServerOptions.TLSOpts = append(metricsServerOptions.TLSOpts, func(config *tls.Config) {
+			config.GetCertificate = metricsCertWatcher.GetCertificate
+		})
 	}
-	// run (sp controller deployment)
-	// Service provider runs on MCP cluster, watches local cluster, and deploys locally
-	setupLog.Info("Service provider running on local MCP cluster, watching for KubeStateMetrics resources")
-	// end sp specifics
 
-	mgr, err := ctrl.NewManager(localMCPCluster.RESTConfig(), ctrl.Options{
-		Scheme:                 localMCPScheme,
+	// Manager runs on onboarding cluster (not platform!)
+	mgr, err := ctrl.NewManager(onboardingCluster.RESTConfig(), ctrl.Options{
+		Scheme:                 scheme.Onboarding,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "232f9e39.openmcp.cloud",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
-		setupLog.Error(err, "unable to start manager")
-		os.Exit(1)
-	}
-	providerConfigUpdates := make(chan event.GenericEvent)
-
-	// Create a default ProviderConfig for standalone mode
-	// In standalone mode, we bypass the PCReconciler and use a static config
-	defaultProviderConfig := &kubestatemetricssv1alpha1.ProviderConfig{}
-	defaultProviderConfig.SetName("kubestatemetrics")
-	pollInterval := metav1.Duration{Duration: 1 * time.Minute}
-	defaultProviderConfig.Spec.PollInterval = &pollInterval
-
-	// Create a local cluster access provider for standalone mode
-	// This provides the local MCP cluster without needing ClusterAccess/AccessRequests
-	localClusterAccessProvider := &LocalClusterAccessProvider{
-		localCluster: localMCPCluster,
+		return fmt.Errorf("unable to start manager: %w", err)
 	}
 
-	spr := spruntime.NewSPReconciler[*kubestatemetricssv1alpha1.KubeStateMetrics, *kubestatemetricssv1alpha1.ProviderConfig](
-		func() *kubestatemetricssv1alpha1.KubeStateMetrics {
-			return &kubestatemetricssv1alpha1.KubeStateMetrics{}
-		},
-	).
-		WithPlatformCluster(localMCPCluster).
-		WithOnboardingCluster(localMCPCluster).
-		WithClusterAccessReconciler(localClusterAccessProvider).
-		WithProviderConfig(defaultProviderConfig).
-		WithServiceProviderReconciler(&controller.KubeStateMetricsReconciler{
-			LocalMCPCluster: localMCPCluster,
-			PodNamespace:    podNamespace,
-		})
-	if err := spr.SetupWithManager(mgr, "kubestatemetrics", providerConfigUpdates); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "KubeStateMetrics")
-		os.Exit(1)
-	}
-	// Setup KubeStateMetricsConfig controller
-	configSpr := spruntime.NewSPReconciler[*kubestatemetricssv1alpha1.KubeStateMetricsConfig, *kubestatemetricssv1alpha1.ProviderConfig](
-		func() *kubestatemetricssv1alpha1.KubeStateMetricsConfig {
-			return &kubestatemetricssv1alpha1.KubeStateMetricsConfig{}
-		},
-	).
-		WithPlatformCluster(localMCPCluster).
-		WithOnboardingCluster(localMCPCluster).
-		WithClusterAccessReconciler(localClusterAccessProvider).
-		WithProviderConfig(defaultProviderConfig).
-		WithServiceProviderReconciler(&controller.KubeStateMetricsConfigReconciler{
-			LocalMCPCluster: localMCPCluster,
-			PodNamespace:    podNamespace,
-		})
-	if err := configSpr.SetupWithManager(mgr, "kubestatemetricsconfig", providerConfigUpdates); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "KubeStateMetricsConfig")
-		os.Exit(1)
+	// Add platform cluster to manager for ProviderConfig watching
+	if err = mgr.Add(platformCluster.Cluster()); err != nil {
+		return fmt.Errorf("unable to add platform cluster to manager: %w", err)
 	}
 
-	pcr := spruntime.NewPCReconciler(providerName, func() *kubestatemetricssv1alpha1.ProviderConfig {
-		return &kubestatemetricssv1alpha1.ProviderConfig{}
-	}).
-		WithPlatformCluster(localMCPCluster).
-		WithUpdateChannel(providerConfigUpdates)
-	if err := pcr.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ProviderConfig")
-		os.Exit(1)
+	// Create a buffered channel for events between reconcilers
+	reconcileEventsCh := make(chan event.GenericEvent, 128)
+
+	ksmReconciler := &controller.KubeStateMetricsReconciler{
+		PlatformCluster:      platformCluster,
+		OnboardingCluster:    onboardingCluster,
+		Recorder:             mgr.GetEventRecorderFor("sp-ksm-controller"),
+		RecieveEventsChannel: reconcileEventsCh,
 	}
+	if err := ksmReconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create controller KubeStateMetrics: %w", err)
+	}
+
+	ksmConfigReconciler := &controller.KubeStateMetricsConfigReconciler{
+		PlatformCluster:      platformCluster,
+		OnboardingCluster:    onboardingCluster,
+		Recorder:             mgr.GetEventRecorderFor("sp-ksm-config-controller"),
+		RecieveEventsChannel: reconcileEventsCh,
+	}
+	if err := ksmConfigReconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create controller KubeStateMetricsConfig: %w", err)
+	}
+
+	providerConfigReconciler := &controller.ProviderConfigReconciler{
+		PlatformCluster:   platformCluster,
+		OnboardingCluster: onboardingCluster,
+		SendEventsChannel: reconcileEventsCh,
+	}
+	if err := providerConfigReconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create controller ProviderConfig: %w", err)
+	}
+
 	// +kubebuilder:scaffold:builder
 
+	if metricsCertWatcher != nil {
+		logger.Info("Adding metrics certificate watcher to manager")
+		if err := mgr.Add(metricsCertWatcher); err != nil {
+			return fmt.Errorf("unable to add metrics certificate watcher to manager: %w", err)
+		}
+	}
+
+	if webhookCertWatcher != nil {
+		logger.Info("Adding webhook certificate watcher to manager")
+		if err := mgr.Add(webhookCertWatcher); err != nil {
+			return fmt.Errorf("unable to add webhook certificate watcher to manager: %w", err)
+		}
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up health check")
-		os.Exit(1)
+		return fmt.Errorf("unable to set up health check: %w", err)
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up ready check")
-		os.Exit(1)
+		return fmt.Errorf("unable to set up ready check: %w", err)
 	}
 
-	setupLog.Info("starting manager")
+	logger.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		setupLog.Error(err, "problem running manager")
-		os.Exit(1)
+		return fmt.Errorf("problem running manager: %w", err)
 	}
-}
-
-// initializeLocalMCPCluster initializes the local MCP cluster with the necessary REST config and client.
-func initializeLocalMCPCluster() (*clusters.Cluster, error) {
-	localCluster := clusters.New("local-mcp")
-
-	localCluster = localCluster.WithRESTConfig(ctrl.GetConfigOrDie())
-
-	if err := localCluster.InitializeClient(localMCPScheme); err != nil {
-		setupLog.Error(err, "Failed to initialize client for local MCP cluster")
-		return nil, err
-	}
-	return localCluster, nil
+	return nil
 }

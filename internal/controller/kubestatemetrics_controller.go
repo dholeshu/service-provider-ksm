@@ -19,11 +19,11 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,10 +45,13 @@ import (
 )
 
 const (
-	defaultNamespace = "observability"
-	defaultReplicas  = int32(1)
-	componentLabel   = "exporter"
-	appName          = "kube-state-metrics"
+	defaultNamespace    = "observability"
+	defaultReplicas     = int32(1)
+	componentLabel      = "exporter"
+	appName             = "kube-state-metrics"
+	imageRegistry       = "crimson-prod.common.repositories.cloud.sap"
+	imageRepository     = "kube-state-metrics/kube-state-metrics"
+	defaultImageVersion = "v2.18.0"
 )
 
 var (
@@ -232,6 +235,13 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 		namespace = defaultNamespace
 	}
 
+	// Build image URL from version
+	version := ksm.Spec.Version
+	if version == "" {
+		version = defaultImageVersion
+	}
+	imageURL := buildImageURL(version)
+
 	// Create namespace
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
 	if _, err := ctrl.CreateOrUpdate(ctx, mcpCluster.Client(), ns, func() error {
@@ -315,7 +325,7 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 
 		container := corev1.Container{
 			Name:  appName,
-			Image: ksm.Spec.Image,
+			Image: imageURL,
 			Args:  args,
 			Ports: []corev1.ContainerPort{
 				{ContainerPort: 8080, Name: "http-metrics"},
@@ -323,13 +333,19 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 			},
 			LivenessProbe: &corev1.Probe{
 				ProbeHandler:        corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/livez", Port: intstr.FromString("http-metrics")}},
-				InitialDelaySeconds: 5,
+				InitialDelaySeconds: 15,
 				TimeoutSeconds:      5,
+				PeriodSeconds:       10,
+				SuccessThreshold:    1,
+				FailureThreshold:    3,
 			},
 			ReadinessProbe: &corev1.Probe{
 				ProbeHandler:        corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/readyz", Port: intstr.FromString("telemetry")}},
-				InitialDelaySeconds: 5,
-				TimeoutSeconds:      5,
+				InitialDelaySeconds: 10,
+				TimeoutSeconds:      3,
+				PeriodSeconds:       5,
+				SuccessThreshold:    1,
+				FailureThreshold:    2,
 			},
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: boolPtr(false),
@@ -350,10 +366,11 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 		}
 
 		podSpec := corev1.PodSpec{
-			ServiceAccountName:           appName,
-			AutomountServiceAccountToken: boolPtr(true),
-			Containers:                   []corev1.Container{container},
-			NodeSelector:                 map[string]string{"kubernetes.io/os": "linux"},
+			ServiceAccountName:            appName,
+			AutomountServiceAccountToken:  boolPtr(true),
+			Containers:                    []corev1.Container{container},
+			NodeSelector:                  map[string]string{"kubernetes.io/os": "linux"},
+			TerminationGracePeriodSeconds: int64Ptr(30),
 		}
 
 		if ksm.Spec.NodeSelector != nil {
@@ -374,10 +391,27 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 			podSpec.Volumes = []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: configMapName}}}}}
 		}
 
+		// Production-ready deployment strategy
+		maxUnavailable := intstr.FromInt(0)
+		maxSurge := intstr.FromInt(1)
+		minReadySeconds := int32(10)
+		progressDeadlineSeconds := int32(300)
+		revisionHistoryLimit := int32(10)
+
 		deployment.Spec = appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": appName}},
 			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxUnavailable: &maxUnavailable,
+					MaxSurge:       &maxSurge,
+				},
+			},
+			MinReadySeconds:         minReadySeconds,
+			ProgressDeadlineSeconds: &progressDeadlineSeconds,
+			RevisionHistoryLimit:    &revisionHistoryLimit,
 		}
 		return nil
 	}); err != nil {
@@ -395,6 +429,22 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 				{Name: "telemetry", Port: 8081, TargetPort: intstr.FromString("telemetry")},
 			},
 			Selector: map[string]string{"app.kubernetes.io/name": appName},
+		}
+		return nil
+	}); err != nil {
+		return false, err
+	}
+
+	// Create PodDisruptionBudget for production readiness
+	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: appName, Namespace: namespace}}
+	if _, err := ctrl.CreateOrUpdate(ctx, mcpCluster.Client(), pdb, func() error {
+		minAvailable := intstr.FromInt(1)
+		pdb.Labels = r.buildLabels(ksm)
+		pdb.Spec = policyv1.PodDisruptionBudgetSpec{
+			MinAvailable: &minAvailable,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app.kubernetes.io/name": appName},
+			},
 		}
 		return nil
 	}); err != nil {
@@ -424,6 +474,7 @@ func (r *KubeStateMetricsReconciler) cleanupKubeStateMetrics(ctx context.Context
 
 	resources := []client.Object{
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: appName, Namespace: namespace}},
+		&policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: appName, Namespace: namespace}},
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: appName, Namespace: namespace}},
 		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: appName}},
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: appName}},
@@ -440,7 +491,10 @@ func (r *KubeStateMetricsReconciler) cleanupKubeStateMetrics(ctx context.Context
 }
 
 func (r *KubeStateMetricsReconciler) buildLabels(obj *v1alpha1.KubeStateMetrics) map[string]string {
-	version := extractVersionFromImage(obj.Spec.Image)
+	version := obj.Spec.Version
+	if version == "" {
+		version = defaultImageVersion
+	}
 	return map[string]string{
 		"app.kubernetes.io/name":      appName,
 		"app.kubernetes.io/component": componentLabel,
@@ -448,16 +502,13 @@ func (r *KubeStateMetricsReconciler) buildLabels(obj *v1alpha1.KubeStateMetrics)
 	}
 }
 
-func extractVersionFromImage(image string) string {
-	parts := strings.Split(image, ":")
-	if len(parts) >= 2 {
-		return parts[len(parts)-1]
-	}
-	return "unknown"
-}
+func boolPtr(b bool) *bool    { return &b }
+func int64Ptr(i int64) *int64 { return &i }
 
-func boolPtr(b bool) *bool       { return &b }
-func int64Ptr(i int64) *int64    { return &i }
+// buildImageURL constructs the full image URL from the SAP internal registry
+func buildImageURL(version string) string {
+	return imageRegistry + "/" + imageRepository + ":" + version
+}
 
 func getMCPPermissions() []clustersv1alpha1.PermissionsRequest {
 	return []clustersv1alpha1.PermissionsRequest{

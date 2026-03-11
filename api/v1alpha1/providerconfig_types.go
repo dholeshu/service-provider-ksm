@@ -32,11 +32,17 @@ type ProviderConfigSpec struct {
 	// The following markers will use OpenAPI v3 schema to validate the value
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
-	// foo is an example field of ProviderConfig. Edit providerconfig_types.go to remove/update
+	// PollInterval defines how often the controller should poll for changes
 	// +optional
 	// +kubebuilder:default:="1m"
 	// +kubebuilder:validation:Format=duration
 	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
+
+	// DefaultVersion specifies the default kube-state-metrics version to use when not specified in KubeStateMetrics resource
+	// +optional
+	// +kubebuilder:default="v2.18.0"
+	// +kubebuilder:validation:Pattern=`^v\d+\.\d+\.\d+$`
+	DefaultVersion string `json:"defaultVersion,omitempty"`
 }
 
 // ProviderConfigStatus defines the observed state of ProviderConfig.

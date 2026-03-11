@@ -3,7 +3,8 @@ module github.com/dholeshu/service-provider-ksm
 go 1.25.6
 
 require (
-	github.com/openmcp-project/controller-utils v0.25.2
+	github.com/openmcp-project/controller-utils v0.26.0
+	github.com/openmcp-project/mcp-operator/api v0.52.0
 	github.com/openmcp-project/openmcp-operator/api v0.18.1
 	github.com/openmcp-project/openmcp-operator/lib v0.18.1
 	github.com/stretchr/testify v1.11.1
@@ -88,8 +89,8 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
-	github.com/spf13/cobra v1.10.0 // indirect
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/cobra v1.10.0
+	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
@@ -119,3 +120,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/openmcp-project/mcp-operator/api => /Users/i541517/SAPDevelop/openmcp-project/mcp-operator/api

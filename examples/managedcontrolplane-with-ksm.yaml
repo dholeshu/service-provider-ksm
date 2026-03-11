@@ -1,0 +1,38 @@
+apiVersion: core.openmcp.cloud/v1alpha1
+kind: ManagedControlPlane
+metadata:
+  name: dev-mcp-ksm-example
+  namespace: default
+spec:
+  # API Server configuration (required)
+  desiredRegion:
+    name: europe
+    direction: central
+
+  components:
+    # API Server is required
+    apiServer:
+      type: GardenerDedicated
+
+    # KubeStateMetrics component (managed by service-provider-ksm)
+    kubeStateMetrics:
+      version: v2.18.0
+
+    # Optional: Other components
+    # crossplane:
+    #   version: 1.20.1
+    #   providers:
+    #     - name: btp
+    #       version: 1.4.0
+
+  # Authentication configuration
+  authentication:
+    enableSystemIdentityProvider: true
+
+  # Authorization configuration
+  authorization:
+    roleBindings:
+      - role: admin
+        subjects:
+          - kind: User
+            name: openmcp:admin@example.com

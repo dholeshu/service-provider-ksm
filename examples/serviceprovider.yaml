@@ -1,0 +1,35 @@
+apiVersion: openmcp.cloud/v1alpha1
+kind: ServiceProvider
+metadata:
+  name: kubestatemetrics
+spec:
+  # Container image for the service provider
+  image: ghcr.io/dholeshu/service-provider-ksm:latest
+
+  # Number of replicas (leader election enabled automatically if > 1)
+  runReplicas: 1
+
+  # Logging verbosity (DEBUG, INFO, ERROR)
+  verbosity: INFO
+
+  # Optional: Environment variables
+  env:
+    - name: ENABLE_WEBHOOKS
+      value: "false"
+
+  # Optional: Image pull secrets for private registries
+  # imagePullSecrets:
+  #   - name: ghcr-pull-secret
+
+  # Optional: Custom init and run commands (usually not needed)
+  # initCommand: ["./service-provider-ksm", "init"]
+  # runCommand: ["./service-provider-ksm", "run"]
+
+  # Optional: Resource limits
+  # resources:
+  #   requests:
+  #     cpu: 100m
+  #     memory: 128Mi
+  #   limits:
+  #     cpu: 500m
+  #     memory: 512Mi

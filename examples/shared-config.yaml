@@ -29,7 +29,7 @@ metadata:
   name: ksm-cluster1
   namespace: default
 spec:
-  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+  version: v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
   namespace: observability
   customResourceStateOnly: true
   configRef:
@@ -43,7 +43,7 @@ metadata:
   name: ksm-cluster2
   namespace: default
 spec:
-  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+  version: v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
   namespace: observability
   customResourceStateOnly: true
   configRef:
