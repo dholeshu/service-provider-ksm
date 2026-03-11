@@ -158,6 +158,8 @@ The service provider requests minimal MCP permissions via `ClusterAccessReconcil
 - **Write** (`create`, `update`, `patch`, `delete`) only for managed resources: namespaces, configmaps, services, serviceaccounts, deployments, poddisruptionbudgets, clusterroles, clusterrolebindings
 - **Auth** (`create`) for `tokenreviews` and `subjectaccessreviews` — required by kube-state-metrics for API server authentication
 
+The kube-state-metrics ClusterRole deployed on MCP clusters additionally includes read access to `customresourcedefinitions` for CRD discovery.
+
 ## API Reference
 
 ### KubeStateMetrics
@@ -179,11 +181,11 @@ Manages kube-state-metrics deployment lifecycle on an MCP cluster.
 
 ### KubeStateMetricsConfig
 
-Defines reusable configuration for kube-state-metrics instances. The config controller validates configuration and stores the expected ConfigMap name in its status. The actual ConfigMap is created on the MCP cluster by the KubeStateMetrics controller.
+Defines reusable configuration for kube-state-metrics instances. The config controller validates configuration and stores the expected ConfigMap name in its status. The actual ConfigMap is created on the MCP cluster by the KubeStateMetrics controller, in the same namespace as the deployment.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `targetNamespace` | string | No | Namespace for the ConfigMap (default: `observability`) |
+| `targetNamespace` | string | No | Stored in status for reference (default: `observability`). The ConfigMap is deployed to the KubeStateMetrics deployment namespace. |
 | `customResourceStateConfig` | string | No | Custom resource state metrics configuration (YAML) |
 | `config` | string | No | Standard kube-state-metrics configuration |
 | `additionalConfigs` | map[string]string | No | Additional config files (filename -> content) |
@@ -195,6 +197,11 @@ Global configuration for the service provider, applied on the platform cluster.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `pollInterval` | duration | `1m` | Reconciliation poll interval |
+| `defaultVersion` | string | `v2.18.0` | Default kube-state-metrics version (must match `^v\d+\.\d+\.\d+$`) |
+
+## Examples
+
+See the `examples/` directory for complete usage examples including basic deployment, configuration references, shared configs, and standard resource monitoring.
 
 ## Development
 
