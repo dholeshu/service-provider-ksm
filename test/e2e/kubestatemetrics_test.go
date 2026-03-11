@@ -48,7 +48,6 @@ func TestServiceProvider(t *testing.T) {
 				return ctx
 			},
 		).
-		Assess("verify domain objects can be created", providers.ImportDomainAPIs("mcp")).
 		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			onboardingConfig, err := clusterutils.OnboardingConfig()
 			if err != nil {

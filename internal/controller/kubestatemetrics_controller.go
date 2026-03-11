@@ -305,6 +305,12 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 			return false, fmt.Errorf("waiting for KubeStateMetricsConfig to be reconciled")
 		}
 		configMapName = config.Status.ConfigMapName
+
+		// Create ConfigMap on MCP cluster from the config spec
+		if err := r.createOrUpdateConfigMap(ctx, config, mcpCluster, namespace); err != nil {
+			return false, fmt.Errorf("failed to create ConfigMap on MCP: %w", err)
+		}
+
 		hasConfig = true
 		log.Info("Using ConfigMap from KubeStateMetricsConfig", "configMap", configMapName)
 	}
@@ -484,10 +490,54 @@ func (r *KubeStateMetricsReconciler) cleanupKubeStateMetrics(ctx context.Context
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: appName, Namespace: namespace}},
 	}
 
+	// Also cleanup ConfigMap if configRef was set
+	if ksm.Spec.ConfigRef != nil {
+		configMapName := ksm.Spec.ConfigRef.Name + configMapSuffix
+		resources = append(resources, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: configMapName, Namespace: namespace}})
+	}
+
 	for _, resource := range resources {
 		if err := mcpCluster.Client().Delete(ctx, resource); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func (r *KubeStateMetricsReconciler) createOrUpdateConfigMap(ctx context.Context, config *v1alpha1.KubeStateMetricsConfig, mcpCluster *clusters.Cluster, namespace string) error {
+	configMapName := config.Status.ConfigMapName
+
+	// Build ConfigMap data
+	data := make(map[string]string)
+	if config.Spec.CustomResourceStateConfig != "" {
+		data["custom-resource-state-config.yaml"] = config.Spec.CustomResourceStateConfig
+	}
+	if config.Spec.Config != "" {
+		data["config.yaml"] = config.Spec.Config
+	}
+	for filename, content := range config.Spec.AdditionalConfigs {
+		data[filename] = content
+	}
+
+	// Create or update ConfigMap on MCP cluster
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName,
+			Namespace: namespace,
+		},
+	}
+
+	if _, err := ctrl.CreateOrUpdate(ctx, mcpCluster.Client(), configMap, func() error {
+		configMap.Labels = map[string]string{
+			"app.kubernetes.io/name":       "kube-state-metrics",
+			"app.kubernetes.io/component":  "config",
+			"app.kubernetes.io/managed-by": "service-provider-ksm",
+		}
+		configMap.Data = data
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	return nil
@@ -558,6 +608,17 @@ func getMCPPermissions() []clustersv1alpha1.PermissionsRequest {
 					APIGroups: []string{"rbac.authorization.k8s.io"},
 					Resources: []string{"clusterroles", "clusterrolebindings"},
 					Verbs:     []string{"create", "update", "patch", "delete"},
+				},
+				// Permissions needed to create ClusterRoles that grant tokenreviews and subjectaccessreviews
+				{
+					APIGroups: []string{"authentication.k8s.io"},
+					Resources: []string{"tokenreviews"},
+					Verbs:     []string{"create"},
+				},
+				{
+					APIGroups: []string{"authorization.k8s.io"},
+					Resources: []string{"subjectaccessreviews"},
+					Verbs:     []string{"create"},
 				},
 			},
 		},
