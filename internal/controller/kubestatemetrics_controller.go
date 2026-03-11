@@ -42,6 +42,7 @@ import (
 
 	v1alpha1 "github.com/dholeshu/service-provider-ksm/api/v1alpha1"
 	"github.com/dholeshu/service-provider-ksm/internal/scheme"
+	spruntime "github.com/dholeshu/service-provider-ksm/pkg/runtime"
 )
 
 const (
@@ -111,14 +112,13 @@ func (r *KubeStateMetricsReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Update status to Progressing
 	oldKsm := ksm.DeepCopy()
-	ksm.Status.Phase = "Progressing"
-	ksm.Status.ObservedGeneration = ksm.Generation
+	spruntime.StatusProgressing(ksm, "Reconciling", "Reconcile in progress")
 
 	// Setup cluster access (references existing ClusterRequest by name)
 	mcpCluster, result, err := r.setupClusterAccess(ctx, req)
 	if err != nil {
 		log.Error(err, "Failed to setup cluster access")
-		ksm.Status.Phase = "Error"
+		spruntime.StatusProgressing(ksm, "ClusterAccessError", fmt.Sprintf("Failed to setup cluster access: %v", err))
 		r.OnboardingCluster.Client().Status().Patch(ctx, ksm, client.MergeFrom(oldKsm))
 		return ctrl.Result{}, err
 	}
@@ -131,17 +131,17 @@ func (r *KubeStateMetricsReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	deploymentReady, err := r.deployKubeStateMetrics(ctx, ksm, mcpCluster)
 	if err != nil {
 		log.Error(err, "Failed to deploy kube-state-metrics")
-		ksm.Status.Phase = "Error"
+		spruntime.StatusProgressing(ksm, "DeploymentError", fmt.Sprintf("Failed to deploy: %v", err))
 		r.OnboardingCluster.Client().Status().Patch(ctx, ksm, client.MergeFrom(oldKsm))
 		return ctrl.Result{}, err
 	}
 
 	// Update status based on deployment readiness
 	if deploymentReady {
-		ksm.Status.Phase = "Ready"
+		spruntime.StatusReady(ksm)
 		log.Info("kube-state-metrics is ready")
 	} else {
-		ksm.Status.Phase = "Progressing"
+		spruntime.StatusProgressing(ksm, "WaitingForPods", "Deployment created, waiting for pods to be ready")
 		log.Info("kube-state-metrics deployment created, waiting for pods to be ready")
 	}
 
@@ -190,6 +190,13 @@ func (r *KubeStateMetricsReconciler) handleDelete(ctx context.Context, req ctrl.
 
 	if !controllerutil.ContainsFinalizer(ksm, KSMFinalizer) {
 		return ctrl.Result{}, nil
+	}
+
+	// Update status to Terminating
+	spruntime.StatusTerminating(ksm)
+	if err := r.OnboardingCluster.Client().Status().Update(ctx, ksm); err != nil {
+		log.Error(err, "Failed to update status to terminating")
+		// Continue with deletion anyway
 	}
 
 	// Get MCP cluster access
@@ -525,10 +532,32 @@ func getMCPPermissions() []clustersv1alpha1.PermissionsRequest {
 	return []clustersv1alpha1.PermissionsRequest{
 		{
 			Rules: []rbacv1.PolicyRule{
+				// Read-only access to all resources for metrics collection
 				{
 					APIGroups: []string{"*"},
 					Resources: []string{"*"},
-					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+					Verbs:     []string{"get", "list", "watch"},
+				},
+				// Write access only for resources we manage
+				{
+					APIGroups: []string{""},
+					Resources: []string{"namespaces", "configmaps", "services", "serviceaccounts"},
+					Verbs:     []string{"create", "update", "patch", "delete"},
+				},
+				{
+					APIGroups: []string{"apps"},
+					Resources: []string{"deployments"},
+					Verbs:     []string{"create", "update", "patch", "delete"},
+				},
+				{
+					APIGroups: []string{"policy"},
+					Resources: []string{"poddisruptionbudgets"},
+					Verbs:     []string{"create", "update", "patch", "delete"},
+				},
+				{
+					APIGroups: []string{"rbac.authorization.k8s.io"},
+					Resources: []string{"clusterroles", "clusterrolebindings"},
+					Verbs:     []string{"create", "update", "patch", "delete"},
 				},
 			},
 		},
@@ -536,10 +565,6 @@ func getMCPPermissions() []clustersv1alpha1.PermissionsRequest {
 }
 
 func getMCPRoleRefs() []commonapi.RoleRef {
-	return []commonapi.RoleRef{
-		{
-			Kind: "ClusterRole",
-			Name: "cluster-admin",
-		},
-	}
+	// No pre-existing cluster roles needed - we use custom permissions above
+	return nil
 }

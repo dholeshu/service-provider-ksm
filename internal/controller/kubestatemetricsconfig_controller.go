@@ -40,6 +40,7 @@ import (
 
 	v1alpha1 "github.com/dholeshu/service-provider-ksm/api/v1alpha1"
 	"github.com/dholeshu/service-provider-ksm/internal/scheme"
+	spruntime "github.com/dholeshu/service-provider-ksm/pkg/runtime"
 )
 
 const (
@@ -107,14 +108,13 @@ func (r *KubeStateMetricsConfigReconciler) Reconcile(ctx context.Context, req ct
 
 	// Update status to Progressing
 	oldConfig := config.DeepCopy()
-	config.Status.Phase = "Progressing"
-	config.Status.ObservedGeneration = config.Generation
+	spruntime.StatusProgressing(config, "Reconciling", "Creating ConfigMap on MCP cluster")
 
 	// Setup cluster access (references existing ClusterRequest by name)
 	mcpCluster, result, err := r.setupClusterAccess(ctx, req)
 	if err != nil {
 		log.Error(err, "Failed to setup cluster access")
-		config.Status.Phase = "Error"
+		spruntime.StatusProgressing(config, "ClusterAccessError", fmt.Sprintf("Failed to setup cluster access: %v", err))
 		r.OnboardingCluster.Client().Status().Patch(ctx, config, client.MergeFrom(oldConfig))
 		return ctrl.Result{}, err
 	}
@@ -126,13 +126,13 @@ func (r *KubeStateMetricsConfigReconciler) Reconcile(ctx context.Context, req ct
 	// Create ConfigMap on MCP cluster
 	if err := r.createOrUpdateConfigMap(ctx, config, mcpCluster); err != nil {
 		log.Error(err, "Failed to create ConfigMap")
-		config.Status.Phase = "Error"
+		spruntime.StatusProgressing(config, "ConfigMapError", fmt.Sprintf("Failed to create ConfigMap: %v", err))
 		r.OnboardingCluster.Client().Status().Patch(ctx, config, client.MergeFrom(oldConfig))
 		return ctrl.Result{}, err
 	}
 
 	// Update status to Ready
-	config.Status.Phase = "Ready"
+	spruntime.StatusReady(config)
 	if err := r.OnboardingCluster.Client().Status().Patch(ctx, config, client.MergeFrom(oldConfig)); err != nil {
 		log.Error(err, "Failed to update status")
 		return ctrl.Result{}, err
@@ -173,6 +173,13 @@ func (r *KubeStateMetricsConfigReconciler) handleDelete(ctx context.Context, req
 
 	if !controllerutil.ContainsFinalizer(config, ConfigMapFinalizer) {
 		return ctrl.Result{}, nil
+	}
+
+	// Update status to Terminating
+	spruntime.StatusTerminating(config)
+	if err := r.OnboardingCluster.Client().Status().Update(ctx, config); err != nil {
+		log.Error(err, "Failed to update status to terminating")
+		// Continue with deletion anyway
 	}
 
 	// Get MCP cluster access
@@ -304,10 +311,6 @@ func getConfigMCPPermissions() []clustersv1alpha1.PermissionsRequest {
 }
 
 func getConfigMCPRoleRefs() []commonapi.RoleRef {
-	return []commonapi.RoleRef{
-		{
-			Kind: "ClusterRole",
-			Name: "cluster-admin",
-		},
-	}
+	// No pre-existing cluster roles needed - we use custom permissions above
+	return nil
 }
