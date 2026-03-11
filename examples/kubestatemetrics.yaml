@@ -5,12 +5,16 @@ metadata:
   name: test-ksm
   namespace: default
 spec:
-  version: v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
+  # Full image path including registry, repository, and tag
+  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0
+
   namespace: observability
   replicas: 1
   customResourceStateOnly: false  # Monitor both standard and custom resources
+
   configRef:
     name: test-config
+
   resources:
     requests:
       cpu: 100m

@@ -73,6 +73,13 @@ spec:
                 description: CustomResourceStateOnly when true, only monitors custom
                   resources (not built-in Kubernetes resources)
                 type: boolean
+              image:
+                description: |-
+                  Image specifies the kube-state-metrics image to deploy
+                  Example: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0
+                example: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0
+                minLength: 1
+                type: string
               imagePullSecrets:
                 description: ImagePullSecrets specifies the image pull secrets for
                   the kube-state-metrics deployment
@@ -402,15 +409,8 @@ spec:
                         type: string
                     type: object
                 type: object
-              version:
-                description: |-
-                  Version specifies the kube-state-metrics version to deploy
-                  The image will be pulled from: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:<version>
-                example: v2.18.0
-                pattern: ^v\d+\.\d+\.\d+$
-                type: string
             required:
-            - version
+            - image
             type: object
           status:
             description: status defines the observed state of KubeStateMetrics

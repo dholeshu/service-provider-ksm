@@ -29,7 +29,7 @@ kind: KubeStateMetrics
 metadata:
   name: test-mcp
 spec:
-  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+  version: v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
   namespace: observability
   replicas: 1
   customResourceStateOnly: true

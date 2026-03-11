@@ -48,7 +48,7 @@ metadata:
   name: crossplane-metrics
   namespace: default
 spec:
-  version: v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
+  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
   namespace: observability
   replicas: 1
   customResourceStateOnly: true

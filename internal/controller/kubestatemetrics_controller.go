@@ -45,13 +45,10 @@ import (
 )
 
 const (
-	defaultNamespace    = "observability"
-	defaultReplicas     = int32(1)
-	componentLabel      = "exporter"
-	appName             = "kube-state-metrics"
-	imageRegistry       = "crimson-prod.common.repositories.cloud.sap"
-	imageRepository     = "kube-state-metrics/kube-state-metrics"
-	defaultImageVersion = "v2.18.0"
+	defaultNamespace = "observability"
+	defaultReplicas  = int32(1)
+	componentLabel   = "exporter"
+	appName          = "kube-state-metrics"
 )
 
 var (
@@ -235,12 +232,11 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 		namespace = defaultNamespace
 	}
 
-	// Build image URL from version
-	version := ksm.Spec.Version
-	if version == "" {
-		version = defaultImageVersion
+	// Get image from spec
+	image := ksm.Spec.Image
+	if image == "" {
+		return false, fmt.Errorf("image is required")
 	}
-	imageURL := buildImageURL(version)
 
 	// Create namespace
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
@@ -325,7 +321,7 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 
 		container := corev1.Container{
 			Name:  appName,
-			Image: imageURL,
+			Image: image,
 			Args:  args,
 			Ports: []corev1.ContainerPort{
 				{ContainerPort: 8080, Name: "http-metrics"},
@@ -491,9 +487,14 @@ func (r *KubeStateMetricsReconciler) cleanupKubeStateMetrics(ctx context.Context
 }
 
 func (r *KubeStateMetricsReconciler) buildLabels(obj *v1alpha1.KubeStateMetrics) map[string]string {
-	version := obj.Spec.Version
-	if version == "" {
-		version = defaultImageVersion
+	// Extract version from image tag if possible for labeling
+	version := "unknown"
+	if obj.Spec.Image != "" {
+		// Try to extract version from image (everything after last ':')
+		parts := splitLast(obj.Spec.Image, ":")
+		if len(parts) == 2 {
+			version = parts[1]
+		}
 	}
 	return map[string]string{
 		"app.kubernetes.io/name":      appName,
@@ -505,9 +506,19 @@ func (r *KubeStateMetricsReconciler) buildLabels(obj *v1alpha1.KubeStateMetrics)
 func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(i int64) *int64 { return &i }
 
-// buildImageURL constructs the full image URL from the SAP internal registry
-func buildImageURL(version string) string {
-	return imageRegistry + "/" + imageRepository + ":" + version
+// splitLast splits a string by the last occurrence of separator
+func splitLast(s, sep string) []string {
+	idx := -1
+	for i := len(s) - 1; i >= 0; i-- {
+		if i+len(sep) <= len(s) && s[i:i+len(sep)] == sep {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return []string{s}
+	}
+	return []string{s[:idx], s[idx+len(sep):]}
 }
 
 func getMCPPermissions() []clustersv1alpha1.PermissionsRequest {

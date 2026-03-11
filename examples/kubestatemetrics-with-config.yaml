@@ -30,7 +30,7 @@ metadata:
   name: monitoring-cluster  # ← MUST match ManagedControlPlaneV2 name!
   namespace: default
 spec:
-  version: v2.10.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
+  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.10.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
   replicas: 1
   namespace: observability
   configRef:

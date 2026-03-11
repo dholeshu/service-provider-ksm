@@ -35,12 +35,12 @@ type ConfigReference struct {
 
 // KubeStateMetricsSpec defines the desired state of KubeStateMetrics
 type KubeStateMetricsSpec struct {
-	// Version specifies the kube-state-metrics version to deploy
-	// The image will be pulled from: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:<version>
+	// Image specifies the kube-state-metrics image to deploy
+	// Example: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^v\d+\.\d+\.\d+$`
-	// +kubebuilder:example="v2.18.0"
-	Version string `json:"version"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:example="crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0"
+	Image string `json:"image"`
 
 	// Namespace specifies the target namespace for kube-state-metrics deployment
 	// +kubebuilder:default="observability"
