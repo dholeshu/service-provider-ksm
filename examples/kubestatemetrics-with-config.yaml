@@ -1,10 +1,11 @@
-# Example KubeStateMetrics with ConfigMap
-# IMPORTANT: The name MUST match the ManagedControlPlaneV2 name to target that MCP
+# KubeStateMetrics with a configuration reference
+# The KubeStateMetricsConfig name can be anything — it does NOT need to match the MCP name.
+# Only the KubeStateMetrics name must match the ManagedControlPlane name.
 ---
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetricsConfig
 metadata:
-  name: monitoring-cluster  # ← MUST match ManagedControlPlaneV2 name!
+  name: my-metrics-config
   namespace: default
 spec:
   targetNamespace: observability
@@ -27,14 +28,14 @@ spec:
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetrics
 metadata:
-  name: monitoring-cluster  # ← MUST match ManagedControlPlaneV2 name!
+  name: my-mcp  # Must match ManagedControlPlane name
   namespace: default
 spec:
-  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.10.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
   replicas: 1
   namespace: observability
   configRef:
-    name: monitoring-cluster  # References the config above
+    name: my-metrics-config  # References the config above
   args:
     - --resources=deployments,pods,nodes
   resources:

@@ -1,9 +1,10 @@
-# Example 1: KubeStateMetricsConfig for Crossplane resources
+# Example: KubeStateMetricsConfig for Crossplane resources with config reference
+---
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetricsConfig
 metadata:
   name: crossplane-config
-  namespace: observability
+  namespace: default
 spec:
   customResourceStateConfig: |
     kind: CustomResourceStateMetrics
@@ -45,24 +46,20 @@ spec:
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetrics
 metadata:
-  name: crossplane-metrics
+  name: my-mcp  # Must match ManagedControlPlane name
   namespace: default
 spec:
-  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
   namespace: observability
   replicas: 1
   customResourceStateOnly: true
 
-  # Reference the config created above
   configRef:
     name: crossplane-config
-    namespace: observability
 
-  # Image pull secrets (optional)
   imagePullSecrets:
-    - name: artifactory-readonly-docker
+    - name: my-registry-secret
 
-  # Resource requests and limits (optional)
   resources:
     requests:
       cpu: 100m
@@ -71,6 +68,5 @@ spec:
       cpu: 500m
       memory: 512Mi
 
-  # Node selector (optional)
   nodeSelector:
     kubernetes.io/os: linux

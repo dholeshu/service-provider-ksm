@@ -1,8 +1,11 @@
+# KubeStateMetricsConfig for custom resource state metrics
+# The config name does NOT need to match the MCP name.
+# It is referenced by KubeStateMetrics resources via configRef.
 ---
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetricsConfig
 metadata:
-  name: test-config
+  name: my-config
   namespace: default
 spec:
   customResourceStateConfig: |
@@ -30,4 +33,3 @@ spec:
                 type: Gauge
                 gauge:
                   path: [status, availableReplicas]
-  targetNamespace: observability

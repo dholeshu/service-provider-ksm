@@ -1,14 +1,12 @@
 # Example ManagedControlPlaneV2 resource
-# This must be created FIRST before creating KubeStateMetrics resources
-# The MCP operator will create a ClusterRequest with the same name
+# The MCP must be created FIRST before creating KubeStateMetrics resources.
+# The KubeStateMetrics resource name must match the MCP name.
 ---
-apiVersion: core.openmcp.cloud/v1alpha1
+apiVersion: core.openmcp.cloud/v2alpha1
 kind: ManagedControlPlaneV2
 metadata:
-  name: monitoring-cluster  # ← This name is critical!
+  name: my-mcp  # KubeStateMetrics name must match this
   namespace: default
 spec:
-  # MCP configuration goes here
-  # This is managed by the MCP operator
   provider: kind
   region: local

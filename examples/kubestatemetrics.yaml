@@ -1,19 +1,18 @@
+# Basic KubeStateMetrics deployment
+# IMPORTANT: The KubeStateMetrics name MUST match the ManagedControlPlane name
 ---
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetrics
 metadata:
-  name: test-ksm
+  name: my-mcp  # Must match ManagedControlPlane name
   namespace: default
 spec:
-  # Full image path including registry, repository, and tag
-  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0
-
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
   namespace: observability
   replicas: 1
-  customResourceStateOnly: false  # Monitor both standard and custom resources
 
   configRef:
-    name: test-config
+    name: my-config
 
   resources:
     requests:

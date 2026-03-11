@@ -1,12 +1,12 @@
-# Example: KubeStateMetrics for standard Kubernetes resources only
+# Example: KubeStateMetrics for standard Kubernetes resources
 # This monitors built-in resources like Deployments, Pods, Nodes, etc.
+---
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetricsConfig
 metadata:
   name: standard-resources-config
-  namespace: monitoring
+  namespace: default
 spec:
-  # Only standard config - no custom resources
   config: |
     # Resource types to monitor (standard Kubernetes resources)
     # Full list: https://github.com/kubernetes/kube-state-metrics/blob/main/docs/README.md
@@ -26,24 +26,17 @@ spec:
       - jobs
       - cronjobs
 ---
-# KubeStateMetrics deployment for standard resources
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetrics
 metadata:
-  name: ksm-standard
+  name: my-mcp  # Must match ManagedControlPlane name
   namespace: default
 spec:
-  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
-  namespace: monitoring
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+  namespace: observability
   replicas: 1
-
-  # Note: customResourceStateOnly is automatically set to false
-  # when standard config is present
-
   configRef:
     name: standard-resources-config
-    namespace: monitoring
-
   resources:
     requests:
       cpu: 200m

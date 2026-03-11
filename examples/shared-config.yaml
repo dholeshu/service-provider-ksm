@@ -1,9 +1,11 @@
 # Example: Reusing the same config across multiple KSM deployments
+# One KubeStateMetricsConfig can be referenced by multiple KubeStateMetrics resources.
+---
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetricsConfig
 metadata:
   name: shared-config
-  namespace: observability
+  namespace: default
 spec:
   customResourceStateConfig: |
     kind: CustomResourceStateMetrics
@@ -22,34 +24,31 @@ spec:
                 gauge:
                   path: [metadata, generation]
 ---
-# First KSM deployment for cluster 1
+# First KSM deployment — name must match the first MCP name
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetrics
 metadata:
-  name: ksm-cluster1
+  name: mcp-cluster-1  # Must match ManagedControlPlane name
   namespace: default
 spec:
-  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
   namespace: observability
   customResourceStateOnly: true
   configRef:
     name: shared-config
-    namespace: observability
 ---
-# Second KSM deployment for cluster 2 (same config, different deployment)
+# Second KSM deployment — name must match the second MCP name
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetrics
 metadata:
-  name: ksm-cluster2
+  name: mcp-cluster-2  # Must match ManagedControlPlane name
   namespace: default
 spec:
-  image: crimson-prod.common.repositories.cloud.sap/kube-state-metrics/kube-state-metrics:v2.18.0  # Image pulled from crimson-prod.common.repositories.cloud.sap
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
   namespace: observability
   customResourceStateOnly: true
   configRef:
     name: shared-config
-    namespace: observability
-  # Different resource limits for this deployment
   resources:
     requests:
       cpu: 200m
