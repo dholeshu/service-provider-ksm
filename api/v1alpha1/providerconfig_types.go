@@ -103,7 +103,10 @@ func init() {
 }
 
 // PollInterval returns the poll interval duration from the spec.
+// Returns the default of 1 minute if not set.
 func (o *ProviderConfig) PollInterval() time.Duration {
-	// TODO pollInterval has to be required
+	if o.Spec.PollInterval == nil {
+		return 1 * time.Minute
+	}
 	return o.Spec.PollInterval.Duration
 }
