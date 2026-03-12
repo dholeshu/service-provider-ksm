@@ -49,14 +49,14 @@ import (
 )
 
 const (
-	defaultNamespace    = "observability"
-	defaultReplicas     = int32(1)
-	componentLabel      = "exporter"
-	appName             = "kube-state-metrics"
-	mcpConfigMapName    = "kube-state-metrics-config"
+	defaultNamespace     = "observability"
+	defaultReplicas      = int32(1)
+	componentLabel       = "exporter"
+	appName              = "kube-state-metrics"
+	mcpConfigMapName     = "kube-state-metrics-config"
 	configHashAnnotation = "ksm.services.openmcp.cloud/config-hash"
-	managedByLabel      = "app.kubernetes.io/managed-by"
-	managedByValue      = "service-provider-ksm"
+	managedByLabel       = "app.kubernetes.io/managed-by"
+	managedByValue       = "service-provider-ksm"
 )
 
 var (

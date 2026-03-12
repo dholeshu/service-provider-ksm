@@ -24,17 +24,19 @@ import (
 // without configRef, and waits for you to manually create the MCP-native ConfigMap.
 //
 // Run with:
-//   go test -v ./test/e2e/ -run TestMCPNativeConfigManual -timeout 30m
+//
+//	go test -v ./test/e2e/ -run TestMCPNativeConfigManual -timeout 30m
 //
 // The test will:
-//   1. Bootstrap platform, onboarding, MCP clusters
-//   2. Deploy a KubeStateMetrics resource (no configRef)
-//   3. Wait for it to become Ready
-//   4. Print kubectl commands to apply the MCP ConfigMap
-//   5. Wait for a signal file before tearing down
+//  1. Bootstrap platform, onboarding, MCP clusters
+//  2. Deploy a KubeStateMetrics resource (no configRef)
+//  3. Wait for it to become Ready
+//  4. Print kubectl commands to apply the MCP ConfigMap
+//  5. Wait for a signal file before tearing down
 //
 // To proceed with teardown, create the signal file:
-//   touch /tmp/ksm-e2e-done
+//
+//	touch /tmp/ksm-e2e-done
 //
 // To skip this test in normal runs, set: MANUAL_TEST=1
 func TestMCPNativeConfigManual(t *testing.T) {
