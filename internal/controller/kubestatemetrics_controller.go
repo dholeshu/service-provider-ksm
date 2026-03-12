@@ -577,7 +577,7 @@ func computeConfigMapHash(data map[string]string) string {
 
 	h := sha256.New()
 	for _, k := range keys {
-		fmt.Fprintf(h, "%s=%s\n", k, data[k])
+		_, _ = fmt.Fprintf(h, "%s=%s\n", k, data[k])
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
