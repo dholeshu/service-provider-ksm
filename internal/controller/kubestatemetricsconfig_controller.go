@@ -24,7 +24,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
@@ -45,10 +44,9 @@ var (
 
 // KubeStateMetricsConfigReconciler reconciles a KubeStateMetricsConfig object
 type KubeStateMetricsConfigReconciler struct {
-	PlatformCluster      *clusters.Cluster
-	OnboardingCluster    *clusters.Cluster
-	Recorder             record.EventRecorder
-	RecieveEventsChannel <-chan event.GenericEvent
+	PlatformCluster   *clusters.Cluster
+	OnboardingCluster *clusters.Cluster
+	Recorder          record.EventRecorder
 }
 
 // SetupWithManager sets up the controller with the Manager.

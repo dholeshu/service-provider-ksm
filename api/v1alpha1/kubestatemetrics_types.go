@@ -85,9 +85,6 @@ type KubeStateMetricsSpec struct {
 
 // KubeStateMetricsStatus defines the observed state of KubeStateMetrics.
 type KubeStateMetricsStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
 	// For Kubernetes API conventions, see:
 	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
 

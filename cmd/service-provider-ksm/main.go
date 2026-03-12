@@ -34,7 +34,6 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -350,7 +349,7 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "232f9e39.openmcp.cloud",
+		LeaderElectionID:       "service-provider-ksm.openmcp.cloud",
 	})
 	if err != nil {
 		return fmt.Errorf("unable to start manager: %w", err)
@@ -361,24 +360,19 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("unable to add platform cluster to manager: %w", err)
 	}
 
-	// Create a buffered channel for events between reconcilers
-	reconcileEventsCh := make(chan event.GenericEvent, 128)
-
 	ksmReconciler := &controller.KubeStateMetricsReconciler{
-		PlatformCluster:      platformCluster,
-		OnboardingCluster:    onboardingCluster,
-		Recorder:             mgr.GetEventRecorderFor("sp-ksm-controller"),
-		RecieveEventsChannel: reconcileEventsCh,
+		PlatformCluster:   platformCluster,
+		OnboardingCluster: onboardingCluster,
+		Recorder:          mgr.GetEventRecorderFor("sp-ksm-controller"),
 	}
 	if err := ksmReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller KubeStateMetrics: %w", err)
 	}
 
 	ksmConfigReconciler := &controller.KubeStateMetricsConfigReconciler{
-		PlatformCluster:      platformCluster,
-		OnboardingCluster:    onboardingCluster,
-		Recorder:             mgr.GetEventRecorderFor("sp-ksm-config-controller"),
-		RecieveEventsChannel: reconcileEventsCh,
+		PlatformCluster:   platformCluster,
+		OnboardingCluster: onboardingCluster,
+		Recorder:          mgr.GetEventRecorderFor("sp-ksm-config-controller"),
 	}
 	if err := ksmConfigReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller KubeStateMetricsConfig: %w", err)
@@ -387,7 +381,6 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	providerConfigReconciler := &controller.ProviderConfigReconciler{
 		PlatformCluster:   platformCluster,
 		OnboardingCluster: onboardingCluster,
-		SendEventsChannel: reconcileEventsCh,
 	}
 	if err := providerConfigReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller ProviderConfig: %w", err)

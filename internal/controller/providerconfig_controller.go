@@ -18,10 +18,8 @@ package controller
 
 import (
 	"context"
-	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
@@ -35,65 +33,16 @@ import (
 type ProviderConfigReconciler struct {
 	PlatformCluster   *clusters.Cluster
 	OnboardingCluster *clusters.Cluster
-	SendEventsChannel chan<- event.GenericEvent
 }
 
 // +kubebuilder:rbac:groups=ksm.services.openmcp.cloud,resources=providerconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=ksm.services.openmcp.cloud,resources=providerconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=ksm.services.openmcp.cloud,resources=providerconfigs/finalizers,verbs=update
 
-// Reconcile reconciles the ProviderConfig instance. It listens for changes to ProviderConfig resources and triggers reconciliation for all KubeStateMetrics and KubeStateMetricsConfig resources when a change is detected.
+// Reconcile reconciles the ProviderConfig instance.
 func (r *ProviderConfigReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
-
-	// List all KubeStateMetrics resources
-	ksmList := &v1alpha1.KubeStateMetricsList{}
-	if err := r.OnboardingCluster.Client().List(ctx, ksmList); err != nil {
-		log.Error(err, "failed to list KubeStateMetrics resources")
-		return ctrl.Result{}, err
-	}
-
-	log.Info("ProviderConfig changed, triggering reconciliation for KubeStateMetrics resources")
-
-	for _, ksm := range ksmList.Items {
-		genericEvent := event.GenericEvent{
-			Object: ksm.DeepCopy(),
-		}
-
-		select {
-		case r.SendEventsChannel <- genericEvent:
-			log.Info("Sent KubeStateMetrics event to channel", "name", ksm.Name, "namespace", ksm.Namespace)
-
-		// we don't block when the channel is full.
-		case <-time.After(1 * time.Second):
-			log.Info("Channel send timeout, dropping event", "name", ksm.Name, "namespace", ksm.Namespace)
-		}
-	}
-
-	// List all KubeStateMetricsConfig resources
-	ksmConfigList := &v1alpha1.KubeStateMetricsConfigList{}
-	if err := r.OnboardingCluster.Client().List(ctx, ksmConfigList); err != nil {
-		log.Error(err, "failed to list KubeStateMetricsConfig resources")
-		return ctrl.Result{}, err
-	}
-
-	log.Info("ProviderConfig changed, triggering reconciliation for KubeStateMetricsConfig resources")
-
-	for _, config := range ksmConfigList.Items {
-		genericEvent := event.GenericEvent{
-			Object: config.DeepCopy(),
-		}
-
-		select {
-		case r.SendEventsChannel <- genericEvent:
-			log.Info("Sent KubeStateMetricsConfig event to channel", "name", config.Name, "namespace", config.Namespace)
-
-		// we don't block when the channel is full.
-		case <-time.After(1 * time.Second):
-			log.Info("Channel send timeout, dropping event", "name", config.Name, "namespace", config.Namespace)
-		}
-	}
-
+	log.Info("ProviderConfig changed")
 	return ctrl.Result{}, nil
 }
 
