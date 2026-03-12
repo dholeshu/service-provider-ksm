@@ -39,6 +39,7 @@ const (
 )
 
 var (
+	// ConfigMapFinalizer is the finalizer used by the KubeStateMetricsConfig controller.
 	ConfigMapFinalizer = v1alpha1.GroupVersion.Group + "/config-finalizer"
 )
 

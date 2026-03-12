@@ -60,6 +60,7 @@ const (
 )
 
 var (
+	// KSMFinalizer is the finalizer used by the KubeStateMetrics controller.
 	KSMFinalizer = v1alpha1.GroupVersion.Group + "/finalizer"
 )
 
@@ -91,6 +92,8 @@ func (r *KubeStateMetricsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // Reconcile reconciles the KubeStateMetrics instance.
+//
+//nolint:gocyclo
 func (r *KubeStateMetricsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
@@ -126,7 +129,7 @@ func (r *KubeStateMetricsReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err != nil {
 		log.Error(err, "Failed to setup cluster access")
 		spruntime.StatusProgressing(ksm, "ClusterAccessError", fmt.Sprintf("Failed to setup cluster access: %v", err))
-		r.OnboardingCluster.Client().Status().Patch(ctx, ksm, client.MergeFrom(oldKsm))
+		r.OnboardingCluster.Client().Status().Patch(ctx, ksm, client.MergeFrom(oldKsm)) //nolint:errcheck
 		return ctrl.Result{}, err
 	}
 	if result != nil {
@@ -139,7 +142,7 @@ func (r *KubeStateMetricsReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err != nil {
 		log.Error(err, "Failed to deploy kube-state-metrics")
 		spruntime.StatusProgressing(ksm, "DeploymentError", fmt.Sprintf("Failed to deploy: %v", err))
-		r.OnboardingCluster.Client().Status().Patch(ctx, ksm, client.MergeFrom(oldKsm))
+		r.OnboardingCluster.Client().Status().Patch(ctx, ksm, client.MergeFrom(oldKsm)) //nolint:errcheck
 		return ctrl.Result{}, err
 	}
 
@@ -238,6 +241,7 @@ func (r *KubeStateMetricsReconciler) handleDelete(ctx context.Context, req ctrl.
 	return ctrl.Result{}, nil
 }
 
+//nolint:gocyclo
 func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context, ksm *v1alpha1.KubeStateMetrics, mcpCluster *clusters.Cluster) (bool, error) {
 	log := log.FromContext(ctx)
 
@@ -581,6 +585,8 @@ func computeConfigMapHash(data map[string]string) string {
 // resolveConfig determines the active configuration source.
 // Priority: MCP ConfigMap (user-created) > onboarding configRef.
 // Returns the ConfigMap name to mount, its data hash, the config source label, and any error.
+//
+//nolint:gocyclo
 func (r *KubeStateMetricsReconciler) resolveConfig(ctx context.Context, ksm *v1alpha1.KubeStateMetrics, mcpCluster *clusters.Cluster, namespace string) (configMapName string, configHash string, configSource string, err error) {
 	log := log.FromContext(ctx)
 
