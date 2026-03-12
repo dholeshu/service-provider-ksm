@@ -484,6 +484,18 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              configHash:
+                description: |-
+                  ConfigHash is the SHA-256 hash of the active ConfigMap data.
+                  Changes to this value trigger a rolling restart of the kube-state-metrics pods.
+                type: string
+              configSource:
+                description: |-
+                  ConfigSource indicates the source of the active configuration.
+                  "mcp" means a ConfigMap named kube-state-metrics-config was found on the MCP cluster.
+                  "onboarding" means the configuration was resolved from a KubeStateMetricsConfig resource via configRef.
+                  Empty means no configuration is active.
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the generation of this resource
                   that was last reconciled by the controller.

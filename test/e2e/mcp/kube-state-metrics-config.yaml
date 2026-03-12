@@ -1,0 +1,46 @@
+# MCP-native ConfigMap fixture for E2E testing.
+# Applied directly to the MCP cluster to test the MCP-native config flow.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-state-metrics-config
+  namespace: observability
+data:
+  custom-resource-state-config.yaml: |
+    kind: CustomResourceStateMetrics
+    spec:
+      resources:
+        - groupVersionKind:
+            group: account.btp.sap.crossplane.io
+            version: "*"   # Consider replacing "*" with specific versions if you only need a subset
+            kind: "*"      # Consider enumerating kinds to avoid extra load and unexpected CRs
+          # Common labels extracted from metadata; namespace may be empty for cluster-scoped CRs
+          labelsFromPath:
+            name:
+              - metadata
+              - name
+            namespace:
+              - metadata
+              - namespace
+          metricNamePrefix: crossplane_btp
+          metrics:
+            # Safe baseline metric: present for every resource (metadata.generation is numeric)
+            - name: resource_generation
+              help: "Resource generation (metadata.generation). Always present and numeric; useful as a baseline metric to synthesize missing condition metrics."
+              each:
+                type: Gauge
+                gauge:
+                  path: [metadata, generation]
+            # Conservative: explicit per-condition metrics. Safer because some CRs lack .status.conditions
+            - name: condition_ready_status
+              help: "Ready condition status of the custom resource (1=true, 0=false)."
+              each:
+                type: Gauge
+                gauge:
+                  path: [status, conditions, "[type=Ready]", status]
+            - name: condition_synced_status
+              help: "Synced condition status of the custom resource (1=true, 0=false)."
+              each:
+                type: Gauge
+                gauge:
+                  path: [status, conditions, "[type=Synced]", status]

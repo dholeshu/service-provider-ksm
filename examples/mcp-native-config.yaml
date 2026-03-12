@@ -1,0 +1,59 @@
+# MCP-Native ConfigMap for kube-state-metrics
+#
+# Create this ConfigMap directly on the MCP cluster to provide configuration
+# without needing a KubeStateMetricsConfig resource on the onboarding cluster.
+#
+# Naming: must be named "kube-state-metrics-config" in the KSM deployment namespace.
+# Priority: this MCP ConfigMap takes precedence over any onboarding configRef.
+# Restart: when ConfigMap data changes, pods automatically restart via rolling update.
+#
+# Expected data keys:
+#   custom-resource-state-config.yaml  — Custom resource state metrics configuration
+#   config.yaml                        — Standard kube-state-metrics configuration
+#   (any additional filenames)         — Mounted under /etc/kube-state-metrics/
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-state-metrics-config
+  namespace: observability
+data:
+  custom-resource-state-config.yaml: |
+    kind: CustomResourceStateMetrics
+    spec:
+      resources:
+        - groupVersionKind:
+            group: account.btp.sap.crossplane.io
+            version: "*"
+            kind: "*"
+          labelsFromPath:
+            name: [metadata, name]
+            namespace: [metadata, namespace]
+          metricNamePrefix: crossplane_btp
+          metrics:
+            - name: resource_generation
+              help: "Resource generation"
+              each:
+                type: Gauge
+                gauge:
+                  path: [metadata, generation]
+            - name: condition_ready_status
+              help: "Ready condition status (1=true, 0=false)"
+              each:
+                type: Gauge
+                gauge:
+                  path: [status, conditions, "[type=Ready]", status]
+---
+# KubeStateMetrics deployment — the controller will automatically detect
+# the kube-state-metrics-config ConfigMap on the MCP cluster.
+# No configRef needed when using MCP-native config.
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetrics
+metadata:
+  name: my-mcp  # Must match ManagedControlPlane name
+  namespace: default
+spec:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+  namespace: observability
+  replicas: 1
+  customResourceStateOnly: true

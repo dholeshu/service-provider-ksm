@@ -18,7 +18,10 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"sort"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -46,10 +49,14 @@ import (
 )
 
 const (
-	defaultNamespace = "observability"
-	defaultReplicas  = int32(1)
-	componentLabel   = "exporter"
-	appName          = "kube-state-metrics"
+	defaultNamespace    = "observability"
+	defaultReplicas     = int32(1)
+	componentLabel      = "exporter"
+	appName             = "kube-state-metrics"
+	mcpConfigMapName    = "kube-state-metrics-config"
+	configHashAnnotation = "ksm.services.openmcp.cloud/config-hash"
+	managedByLabel      = "app.kubernetes.io/managed-by"
+	managedByValue      = "service-provider-ksm"
 )
 
 var (
@@ -150,12 +157,13 @@ func (r *KubeStateMetricsReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	// Requeue if not ready yet to check again
+	// Requeue if not ready yet to check again sooner
 	if !deploymentReady {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	return ctrl.Result{}, nil
+	// Always requeue periodically to detect MCP ConfigMap changes
+	return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 }
 
 func (r *KubeStateMetricsReconciler) setupClusterAccess(ctx context.Context, req ctrl.Request) (*clusters.Cluster, *ctrl.Result, error) {
@@ -289,30 +297,19 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 		return false, err
 	}
 
-	// Resolve config
-	var configMapName string
-	var hasConfig bool
-	if ksm.Spec.ConfigRef != nil {
-		configNamespace := ksm.Spec.ConfigRef.Namespace
-		if configNamespace == "" {
-			configNamespace = ksm.Namespace
-		}
-		config := &v1alpha1.KubeStateMetricsConfig{}
-		if err := r.OnboardingCluster.Client().Get(ctx, client.ObjectKey{Name: ksm.Spec.ConfigRef.Name, Namespace: configNamespace}, config); err != nil {
-			return false, fmt.Errorf("KubeStateMetricsConfig not found: %w", err)
-		}
-		if config.Status.ConfigMapName == "" {
-			return false, fmt.Errorf("waiting for KubeStateMetricsConfig to be reconciled")
-		}
-		configMapName = config.Status.ConfigMapName
+	// Resolve config (MCP-native ConfigMap takes priority over onboarding configRef)
+	configMapName, configHash, configSource, err := r.resolveConfig(ctx, ksm, mcpCluster, namespace)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve config: %w", err)
+	}
+	hasConfig := configMapName != ""
 
-		// Create ConfigMap on MCP cluster from the config spec
-		if err := r.createOrUpdateConfigMap(ctx, config, mcpCluster, namespace); err != nil {
-			return false, fmt.Errorf("failed to create ConfigMap on MCP: %w", err)
-		}
+	// Update status with config source info
+	ksm.Status.ConfigSource = configSource
+	ksm.Status.ConfigHash = configHash
 
-		hasConfig = true
-		log.Info("Using ConfigMap from KubeStateMetricsConfig", "configMap", configMapName)
+	if hasConfig {
+		log.Info("Config resolved", "configMap", configMapName, "source", configSource, "hash", configHash)
 	}
 
 	// Create Deployment
@@ -407,10 +404,16 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 		progressDeadlineSeconds := int32(300)
 		revisionHistoryLimit := int32(10)
 
+		// Build pod template annotations (config hash triggers rolling restart)
+		podAnnotations := map[string]string{}
+		if configHash != "" {
+			podAnnotations[configHashAnnotation] = configHash
+		}
+
 		deployment.Spec = appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": appName}},
-			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations}, Spec: podSpec},
 			Strategy: appsv1.DeploymentStrategy{
 				Type: appsv1.RollingUpdateDeploymentStrategyType,
 				RollingUpdate: &appsv1.RollingUpdateDeployment{
@@ -476,6 +479,8 @@ func (r *KubeStateMetricsReconciler) deployKubeStateMetrics(ctx context.Context,
 }
 
 func (r *KubeStateMetricsReconciler) cleanupKubeStateMetrics(ctx context.Context, ksm *v1alpha1.KubeStateMetrics, mcpCluster *clusters.Cluster) error {
+	log := log.FromContext(ctx)
+
 	namespace := ksm.Spec.Namespace
 	if namespace == "" {
 		namespace = defaultNamespace
@@ -490,10 +495,20 @@ func (r *KubeStateMetricsReconciler) cleanupKubeStateMetrics(ctx context.Context
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: appName, Namespace: namespace}},
 	}
 
-	// Also cleanup ConfigMap if configRef was set
+	// Only cleanup controller-managed ConfigMaps (from configRef), never user-created MCP ConfigMaps
 	if ksm.Spec.ConfigRef != nil {
 		configMapName := ksm.Spec.ConfigRef.Name + configMapSuffix
-		resources = append(resources, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: configMapName, Namespace: namespace}})
+		cm := &corev1.ConfigMap{}
+		cmKey := client.ObjectKey{Name: configMapName, Namespace: namespace}
+		if err := mcpCluster.Client().Get(ctx, cmKey, cm); err == nil {
+			if cm.Labels[managedByLabel] == managedByValue {
+				resources = append(resources, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: configMapName, Namespace: namespace}})
+			} else {
+				log.Info("Skipping deletion of non-managed ConfigMap", "configMap", configMapName)
+			}
+		} else if !apierrors.IsNotFound(err) {
+			log.Error(err, "Failed to check ConfigMap for cleanup", "configMap", configMapName)
+		}
 	}
 
 	for _, resource := range resources {
@@ -530,9 +545,9 @@ func (r *KubeStateMetricsReconciler) createOrUpdateConfigMap(ctx context.Context
 
 	if _, err := ctrl.CreateOrUpdate(ctx, mcpCluster.Client(), configMap, func() error {
 		configMap.Labels = map[string]string{
-			"app.kubernetes.io/name":       "kube-state-metrics",
-			"app.kubernetes.io/component":  "config",
-			"app.kubernetes.io/managed-by": "service-provider-ksm",
+			"app.kubernetes.io/name":      "kube-state-metrics",
+			"app.kubernetes.io/component": "config",
+			managedByLabel:                managedByValue,
 		}
 		configMap.Data = data
 		return nil
@@ -541,6 +556,95 @@ func (r *KubeStateMetricsReconciler) createOrUpdateConfigMap(ctx context.Context
 	}
 
 	return nil
+}
+
+// computeConfigMapHash computes a SHA-256 hash of the ConfigMap data for change detection.
+func computeConfigMapHash(data map[string]string) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	// Sort keys for deterministic ordering
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	h := sha256.New()
+	for _, k := range keys {
+		fmt.Fprintf(h, "%s=%s\n", k, data[k])
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// resolveConfig determines the active configuration source.
+// Priority: MCP ConfigMap (user-created) > onboarding configRef.
+// Returns the ConfigMap name to mount, its data hash, the config source label, and any error.
+func (r *KubeStateMetricsReconciler) resolveConfig(ctx context.Context, ksm *v1alpha1.KubeStateMetrics, mcpCluster *clusters.Cluster, namespace string) (configMapName string, configHash string, configSource string, err error) {
+	log := log.FromContext(ctx)
+
+	// 1. Check for MCP-native ConfigMap (user-created, highest priority)
+	mcpCM := &corev1.ConfigMap{}
+	mcpCMKey := client.ObjectKey{Name: mcpConfigMapName, Namespace: namespace}
+	if getErr := mcpCluster.Client().Get(ctx, mcpCMKey, mcpCM); getErr == nil {
+		// MCP ConfigMap found — use it
+		configHash = computeConfigMapHash(mcpCM.Data)
+		log.Info("Using MCP-native ConfigMap", "configMap", mcpConfigMapName, "hash", configHash)
+
+		// Clean up stale controller-managed ConfigMap if configRef was also set
+		if ksm.Spec.ConfigRef != nil {
+			staleName := ksm.Spec.ConfigRef.Name + configMapSuffix
+			staleCM := &corev1.ConfigMap{}
+			staleKey := client.ObjectKey{Name: staleName, Namespace: namespace}
+			if getErr2 := mcpCluster.Client().Get(ctx, staleKey, staleCM); getErr2 == nil {
+				// Only delete if it's controller-managed
+				if staleCM.Labels[managedByLabel] == managedByValue {
+					log.Info("Cleaning up stale controller-managed ConfigMap", "configMap", staleName)
+					if delErr := mcpCluster.Client().Delete(ctx, staleCM); delErr != nil && !apierrors.IsNotFound(delErr) {
+						log.Error(delErr, "Failed to clean up stale ConfigMap", "configMap", staleName)
+					}
+				}
+			}
+		}
+
+		return mcpConfigMapName, configHash, "mcp", nil
+	} else if !apierrors.IsNotFound(getErr) {
+		return "", "", "", fmt.Errorf("failed to check MCP ConfigMap: %w", getErr)
+	}
+
+	// 2. Fall back to onboarding configRef
+	if ksm.Spec.ConfigRef != nil {
+		configNamespace := ksm.Spec.ConfigRef.Namespace
+		if configNamespace == "" {
+			configNamespace = ksm.Namespace
+		}
+		config := &v1alpha1.KubeStateMetricsConfig{}
+		if err := r.OnboardingCluster.Client().Get(ctx, client.ObjectKey{Name: ksm.Spec.ConfigRef.Name, Namespace: configNamespace}, config); err != nil {
+			return "", "", "", fmt.Errorf("KubeStateMetricsConfig not found: %w", err)
+		}
+		if config.Status.ConfigMapName == "" {
+			return "", "", "", fmt.Errorf("waiting for KubeStateMetricsConfig to be reconciled")
+		}
+
+		// Push ConfigMap to MCP via existing createOrUpdateConfigMap()
+		if err := r.createOrUpdateConfigMap(ctx, config, mcpCluster, namespace); err != nil {
+			return "", "", "", fmt.Errorf("failed to create ConfigMap on MCP: %w", err)
+		}
+
+		// Read back the pushed ConfigMap to compute hash
+		pushedCM := &corev1.ConfigMap{}
+		if err := mcpCluster.Client().Get(ctx, client.ObjectKey{Name: config.Status.ConfigMapName, Namespace: namespace}, pushedCM); err != nil {
+			return "", "", "", fmt.Errorf("failed to read pushed ConfigMap: %w", err)
+		}
+		configHash = computeConfigMapHash(pushedCM.Data)
+
+		log.Info("Using ConfigMap from KubeStateMetricsConfig", "configMap", config.Status.ConfigMapName, "hash", configHash)
+		return config.Status.ConfigMapName, configHash, "onboarding", nil
+	}
+
+	// 3. No configuration
+	return "", "", "", nil
 }
 
 func (r *KubeStateMetricsReconciler) buildLabels(obj *v1alpha1.KubeStateMetrics) map[string]string {

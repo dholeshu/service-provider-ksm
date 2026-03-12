@@ -1,4 +1,7 @@
 # Example: KubeStateMetricsConfig for Crossplane resources with config reference
+#
+# Alternative: For a simpler approach, create a ConfigMap named "kube-state-metrics-config"
+# directly on the MCP cluster. See examples/mcp-native-config.yaml.
 ---
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetricsConfig

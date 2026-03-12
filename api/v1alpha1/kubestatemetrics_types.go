@@ -108,6 +108,18 @@ type KubeStateMetricsStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration"`
 	// Phase is the current phase of the resource.
 	Phase string `json:"phase"`
+
+	// ConfigSource indicates the source of the active configuration.
+	// "mcp" means a ConfigMap named kube-state-metrics-config was found on the MCP cluster.
+	// "onboarding" means the configuration was resolved from a KubeStateMetricsConfig resource via configRef.
+	// Empty means no configuration is active.
+	// +optional
+	ConfigSource string `json:"configSource,omitempty"`
+
+	// ConfigHash is the SHA-256 hash of the active ConfigMap data.
+	// Changes to this value trigger a rolling restart of the kube-state-metrics pods.
+	// +optional
+	ConfigHash string `json:"configHash,omitempty"`
 }
 
 // KubeStateMetrics is the Schema for the kubestatemetricss API

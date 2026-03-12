@@ -32,7 +32,44 @@ spec:
 EOF
 ```
 
-### 2. Create Configuration (Optional)
+### 2. Configure kube-state-metrics (Choose One)
+
+#### Option A: MCP-Native ConfigMap (Recommended)
+
+Create a ConfigMap named `kube-state-metrics-config` directly on the MCP cluster. This is the simplest approach — no `KubeStateMetricsConfig` resource needed on the onboarding cluster.
+
+```yaml
+# Apply this to the MCP cluster
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-state-metrics-config
+  namespace: observability
+data:
+  custom-resource-state-config.yaml: |
+    spec:
+      resources:
+        - groupVersionKind:
+            group: "apps"
+            version: "v1"
+            kind: "Deployment"
+          metricNamePrefix: kube_deployment
+          metrics:
+            - name: "replicas"
+              help: "Number of replicas"
+              each:
+                type: Gauge
+                gauge:
+                  path: [spec, replicas]
+```
+
+**Key behavior:**
+- **Fixed name**: Must be `kube-state-metrics-config` in the KSM deployment namespace (default: `observability`)
+- **Priority**: MCP ConfigMap always takes precedence over onboarding `configRef`
+- **Auto-restart**: When ConfigMap data changes, pods automatically restart via rolling update (SHA-256 hash annotation)
+- **Ownership**: The controller never deletes user-created ConfigMaps — only controller-managed ConfigMaps (from `configRef`) are cleaned up
+
+#### Option B: Onboarding KubeStateMetricsConfig
 
 ```yaml
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
@@ -129,7 +166,8 @@ The service provider runs two controllers on the onboarding cluster:
 │  ├─ ServiceAccount: kube-state-metrics                       │
 │  ├─ ClusterRole: kube-state-metrics (read-only + auth)       │
 │  ├─ ClusterRoleBinding: kube-state-metrics                   │
-│  ├─ ConfigMap: {config-name}-ksm-config (if config specified)│
+│  ├─ ConfigMap: kube-state-metrics-config (MCP-native, user)  │
+│  ├─ ConfigMap: {config-name}-ksm-config (if configRef used)  │
 │  ├─ Deployment: kube-state-metrics                           │
 │  ├─ Service: kube-state-metrics (headless)                   │
 │  └─ PodDisruptionBudget: kube-state-metrics                  │
