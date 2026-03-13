@@ -10,7 +10,7 @@ This service provider automates deployment and management of kube-state-metrics 
 
 - **Flexible Image Configuration**: Support for any container registry (public, private, SAP internal)
 - **Production-Ready**: Zero-downtime updates, PodDisruptionBudget, optimized health probes
-- **Configuration Management**: Separate CRD for reusable configurations
+- **MCP-Native Configuration**: Deploy a ConfigMap directly on the MCP cluster — no extra CRDs needed
 - **Full Lifecycle**: Automated create, update, and delete operations
 - **Security Hardened**: Non-root, read-only filesystem, minimal RBAC permissions
 
@@ -32,11 +32,32 @@ spec:
 EOF
 ```
 
-### 2. Configure kube-state-metrics (Choose One)
+### 2. Deploy kube-state-metrics
 
-#### Option A: MCP-Native ConfigMap (Recommended)
+```yaml
+apiVersion: ksm.services.openmcp.cloud/v1alpha1
+kind: KubeStateMetrics
+metadata:
+  name: my-mcp-cluster  # Must match ManagedControlPlane name
+  namespace: default
+spec:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+  replicas: 2
+  namespace: observability
+  args:
+    - --resources=deployments,pods,nodes,services
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+```
 
-Create a ConfigMap named `kube-state-metrics-config` directly on the MCP cluster. This is the simplest approach — no `KubeStateMetricsConfig` resource needed on the onboarding cluster.
+### 3. (Optional) Provide Configuration via MCP-Native ConfigMap
+
+Create a ConfigMap named `kube-state-metrics-config` directly on the MCP cluster:
 
 ```yaml
 # Apply this to the MCP cluster
@@ -65,67 +86,14 @@ data:
 
 **Key behavior:**
 - **Fixed name**: Must be `kube-state-metrics-config` in the KSM deployment namespace (default: `observability`)
-- **Priority**: MCP ConfigMap always takes precedence over onboarding `configRef`
 - **Auto-restart**: When ConfigMap data changes, pods automatically restart via rolling update (SHA-256 hash annotation)
-- **Ownership**: The controller never deletes user-created ConfigMaps — only controller-managed ConfigMaps (from `configRef`) are cleaned up
-
-#### Option B: Onboarding KubeStateMetricsConfig
-
-```yaml
-apiVersion: ksm.services.openmcp.cloud/v1alpha1
-kind: KubeStateMetricsConfig
-metadata:
-  name: my-config
-  namespace: default
-spec:
-  targetNamespace: observability
-  customResourceStateConfig: |
-    spec:
-      resources:
-        - groupVersionKind:
-            group: "apps"
-            version: "v1"
-            kind: "Deployment"
-          metricNamePrefix: kube_deployment
-          metrics:
-            - name: "replicas"
-              help: "Number of replicas"
-              each:
-                type: Gauge
-                gauge:
-                  path: [spec, replicas]
-```
-
-### 3. Deploy kube-state-metrics
-
-```yaml
-apiVersion: ksm.services.openmcp.cloud/v1alpha1
-kind: KubeStateMetrics
-metadata:
-  name: my-mcp-cluster  # Must match ManagedControlPlane name
-  namespace: default
-spec:
-  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
-  replicas: 2
-  namespace: observability
-  configRef:
-    name: my-config
-  args:
-    - --resources=deployments,pods,nodes,services
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
-```
+- **Ownership**: The controller never deletes user-created ConfigMaps
 
 ### 4. Verify Deployment
 
 ```shell
 # Check resource status on onboarding cluster
-kubectl get kubestatemetricsconfig,kubestatemetrics -A
+kubectl get kubestatemetrics -A
 
 # Check actual deployment on MCP cluster
 kubectl get deployment,pods,svc,pdb -n observability --context <mcp-context>
@@ -135,10 +103,9 @@ kubectl get deployment,pods,svc,pdb -n observability --context <mcp-context>
 
 ### Controller Design
 
-The service provider runs two controllers on the onboarding cluster:
+The service provider runs on the onboarding cluster:
 
-- **KubeStateMetricsConfig controller** — Validates configuration and sets status. Does not require MCP cluster access. Stores the expected ConfigMap name in its status so the KubeStateMetrics controller can use it.
-- **KubeStateMetrics controller** — Manages the full kube-state-metrics lifecycle on MCP clusters. Uses `ClusterAccessReconciler` to obtain MCP cluster access via AccessRequests. Creates all resources (Deployment, Service, ConfigMap, RBAC, PDB) on the target MCP cluster.
+- **KubeStateMetrics controller** — Manages the full kube-state-metrics lifecycle on MCP clusters. Uses `ClusterAccessReconciler` to obtain MCP cluster access via AccessRequests. Creates all resources (Deployment, Service, RBAC, PDB) on the target MCP cluster. Auto-detects an MCP-native ConfigMap and triggers rolling restarts on config changes.
 
 ### OpenMCP Integration
 
@@ -154,7 +121,6 @@ The service provider runs two controllers on the onboarding cluster:
 ┌──────────────────────────────────────────────────────────────┐
 │ Onboarding Cluster                                           │
 │  ├─ Controller Pod: sp-kubestatemetrics                      │
-│  ├─ KubeStateMetricsConfig CRD (config validation)           │
 │  ├─ KubeStateMetrics CRD (deployment lifecycle)              │
 │  └─ User creates resources here                              │
 └──────────────────────────────────────────────────────────────┘
@@ -166,8 +132,7 @@ The service provider runs two controllers on the onboarding cluster:
 │  ├─ ServiceAccount: kube-state-metrics                       │
 │  ├─ ClusterRole: kube-state-metrics (read-only + auth)       │
 │  ├─ ClusterRoleBinding: kube-state-metrics                   │
-│  ├─ ConfigMap: kube-state-metrics-config (MCP-native, user)  │
-│  ├─ ConfigMap: {config-name}-ksm-config (if configRef used)  │
+│  ├─ ConfigMap: kube-state-metrics-config (user-created)      │
 │  ├─ Deployment: kube-state-metrics                           │
 │  ├─ Service: kube-state-metrics (headless)                   │
 │  └─ PodDisruptionBudget: kube-state-metrics                  │
@@ -209,24 +174,16 @@ Manages kube-state-metrics deployment lifecycle on an MCP cluster.
 | `image` | string | Yes | - | Full image path (e.g., `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0`) |
 | `namespace` | string | No | `observability` | Target namespace on MCP cluster |
 | `replicas` | int32 | No | `1` | Number of replicas |
-| `configRef` | object | No | - | Reference to KubeStateMetricsConfig |
 | `imagePullSecrets` | []LocalObjectReference | No | - | Image pull secrets for private registries |
 | `resources` | ResourceRequirements | No | - | CPU/memory requests and limits |
 | `args` | []string | No | - | Additional command-line arguments |
 | `nodeSelector` | map[string]string | No | - | Node selector for pod scheduling |
 | `securityContext` | PodSecurityContext | No | - | Pod-level security context |
-| `customResourceStateOnly` | bool | No | `true` | Monitor only custom resources |
 
-### KubeStateMetricsConfig
-
-Defines reusable configuration for kube-state-metrics instances. The config controller validates configuration and stores the expected ConfigMap name in its status. The actual ConfigMap is created on the MCP cluster by the KubeStateMetrics controller, in the same namespace as the deployment.
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `targetNamespace` | string | No | Stored in status for reference (default: `observability`). The ConfigMap is deployed to the KubeStateMetrics deployment namespace. |
-| `customResourceStateConfig` | string | No | Custom resource state metrics configuration (YAML) |
-| `config` | string | No | Standard kube-state-metrics configuration |
-| `additionalConfigs` | map[string]string | No | Additional config files (filename -> content) |
+> **Auto-detection:** If a ConfigMap named `kube-state-metrics-config` exists in the deployment namespace, the controller inspects its keys and auto-derives KSM flags:
+> - `custom-resource-state-config.yaml` present → adds `--custom-resource-state-config-file`
+> - `custom-resource-state-config.yaml` present **without** `config.yaml` → also adds `--custom-resource-state-only`
+> - `config.yaml` present → adds `--config`
 
 ### ProviderConfig (Optional)
 
@@ -239,7 +196,7 @@ Global configuration for the service provider, applied on the platform cluster.
 
 ## Examples
 
-See the `examples/` directory for complete usage examples including basic deployment, configuration references, shared configs, and standard resource monitoring.
+See the `examples/` directory for complete usage examples including basic deployment and MCP-native ConfigMap configuration.
 
 ## Development
 
@@ -266,20 +223,22 @@ docker build -f Dockerfile.local -t service-provider-ksm:e2e-test .
 The project includes E2E tests using the [openmcp-testing](https://github.com/openmcp-project/openmcp-testing) framework. Tests create a full OpenMCP environment with kind clusters (platform, onboarding, MCP) and verify the service provider end-to-end.
 
 ```shell
-# Build and run E2E tests
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/service-provider-ksm-linux ./cmd/service-provider-ksm/
-docker build -f Dockerfile.local -t service-provider-ksm:e2e-test .
-go test -v ./test/e2e/... -timeout 30m
+# Build image and run E2E tests
+task test-e2e
 ```
 
-The E2E test:
-1. Creates platform, onboarding, and MCP kind clusters
-2. Deploys the OpenMCP operator and cluster/service providers
-3. Creates `KubeStateMetricsConfig` and `KubeStateMetrics` resources on the onboarding cluster
-4. Verifies both resources reach `Ready` status
-5. Tears down resources and clusters
+The E2E suite covers four ConfigMap scenarios:
 
-Test fixtures are in `test/e2e/onboarding/` (resources applied to onboarding cluster) and `test/e2e/platform/` (ProviderConfig applied to platform cluster).
+| Test | ConfigMap Keys | Verified Args | Volume |
+|------|---------------|--------------|--------|
+| `TestNoConfigMap` | none | none | no |
+| `TestCRSConfigOnly` | `custom-resource-state-config.yaml` | `--custom-resource-state-config-file` + `--custom-resource-state-only` | yes |
+| `TestStdConfigOnly` | `config.yaml` | `--config` | yes |
+| `TestBothConfigs` | both | `--custom-resource-state-config-file` + `--config` (no `--custom-resource-state-only`) | yes |
+
+Each test creates its own MCP cluster lifecycle, deploys KSM, optionally creates a ConfigMap programmatically, and verifies the resulting deployment args and volume mounts.
+
+Test fixtures are in `test/e2e/onboarding/` (KubeStateMetrics resource) and `test/e2e/platform/` (ProviderConfig).
 
 ### Code Generation
 
@@ -300,10 +259,6 @@ Ensure the image exists and is accessible. If using a private registry, create a
 1. Check controller logs: `kubectl logs -n openmcp-system deployment/sp-kubestatemetrics --context kind-platform`
 2. Check AccessRequest status: `kubectl get accessrequest -A --context kind-platform`
 3. Check deployment on MCP: `kubectl get deployment kube-state-metrics -n observability --context <mcp-context>`
-
-### KubeStateMetricsConfig Not Becoming Ready
-
-The config controller validates configuration on the onboarding cluster. If it's not becoming Ready, check the controller logs for validation errors.
 
 ### Wrong MCP Cluster
 

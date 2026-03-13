@@ -53,26 +53,6 @@ spec:
                 items:
                   type: string
                 type: array
-              configRef:
-                description: ConfigRef references a KubeStateMetricsConfig resource
-                  containing the configuration
-                properties:
-                  name:
-                    description: Name is the name of the KubeStateMetricsConfig resource
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace is the namespace of the KubeStateMetricsConfig resource
-                      If not specified, uses the same namespace as the KubeStateMetrics resource
-                    type: string
-                required:
-                - name
-                type: object
-              customResourceStateOnly:
-                default: true
-                description: CustomResourceStateOnly when true, only monitors custom
-                  resources (not built-in Kubernetes resources)
-                type: boolean
               image:
                 description: |-
                   Image specifies the kube-state-metrics image to deploy
@@ -493,7 +473,6 @@ spec:
                 description: |-
                   ConfigSource indicates the source of the active configuration.
                   "mcp" means a ConfigMap named kube-state-metrics-config was found on the MCP cluster.
-                  "onboarding" means the configuration was resolved from a KubeStateMetricsConfig resource via configRef.
                   Empty means no configuration is active.
                 type: string
               observedGeneration:

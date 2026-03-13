@@ -1,10 +1,8 @@
 # MCP-Native ConfigMap for kube-state-metrics
 #
-# Create this ConfigMap directly on the MCP cluster to provide configuration
-# without needing a KubeStateMetricsConfig resource on the onboarding cluster.
+# Create this ConfigMap directly on the MCP cluster to provide configuration.
 #
 # Naming: must be named "kube-state-metrics-config" in the KSM deployment namespace.
-# Priority: this MCP ConfigMap takes precedence over any onboarding configRef.
 # Restart: when ConfigMap data changes, pods automatically restart via rolling update.
 #
 # Expected data keys:
@@ -46,7 +44,6 @@ data:
 ---
 # KubeStateMetrics deployment — the controller will automatically detect
 # the kube-state-metrics-config ConfigMap on the MCP cluster.
-# No configRef needed when using MCP-native config.
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetrics
 metadata:
@@ -56,4 +53,3 @@ spec:
   image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
   namespace: observability
   replicas: 1
-  customResourceStateOnly: true

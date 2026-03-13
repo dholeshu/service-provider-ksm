@@ -1,13 +1,15 @@
 # Example: KubeStateMetrics for standard Kubernetes resources
 # This monitors built-in resources like Deployments, Pods, Nodes, etc.
+#
+# Step 1: Deploy the MCP-native ConfigMap on the MCP cluster
 ---
-apiVersion: ksm.services.openmcp.cloud/v1alpha1
-kind: KubeStateMetricsConfig
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: standard-resources-config
-  namespace: default
-spec:
-  config: |
+  name: kube-state-metrics-config
+  namespace: observability
+data:
+  config.yaml: |
     # Resource types to monitor (standard Kubernetes resources)
     # Full list: https://github.com/kubernetes/kube-state-metrics/blob/main/docs/README.md
     resources:
@@ -26,6 +28,7 @@ spec:
       - jobs
       - cronjobs
 ---
+# Step 2: Deploy KubeStateMetrics on the onboarding cluster
 apiVersion: ksm.services.openmcp.cloud/v1alpha1
 kind: KubeStateMetrics
 metadata:
@@ -35,8 +38,6 @@ spec:
   image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
   namespace: observability
   replicas: 1
-  configRef:
-    name: standard-resources-config
   resources:
     requests:
       cpu: 200m

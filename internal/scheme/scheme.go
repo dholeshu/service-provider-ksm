@@ -29,7 +29,7 @@ func init() {
 	utilruntime.Must(clustersv1alpha1.AddToScheme(Platform))
 	utilruntime.Must(providersv1alpha1.AddToScheme(Platform))
 
-	// Onboarding cluster scheme (KubeStateMetrics, KubeStateMetricsConfig)
+	// Onboarding cluster scheme (KubeStateMetrics)
 	utilruntime.Must(clientgoscheme.AddToScheme(Onboarding))
 	utilruntime.Must(apiextensionv1.AddToScheme(Onboarding))
 	utilruntime.Must(kubestatemetricssv1alpha1.AddToScheme(Onboarding))

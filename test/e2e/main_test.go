@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 		ServiceProviders: []providers.ServiceProviderSetup{
 			{
 				Name:               "kubestatemetrics",
-				Image:              "service-provider-ksm:e2e-test",
+				Image:              "ghcr.io/openmcp-project/images/service-provider-ksm:0.0.1",
 				LoadImageToCluster: true,
 			},
 		},

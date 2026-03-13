@@ -21,18 +21,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ConfigReference references a KubeStateMetricsConfig resource
-type ConfigReference struct {
-	// Name is the name of the KubeStateMetricsConfig resource
-	// +kubebuilder:validation:Required
-	Name string `json:"name"`
-
-	// Namespace is the namespace of the KubeStateMetricsConfig resource
-	// If not specified, uses the same namespace as the KubeStateMetrics resource
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
-}
-
 // KubeStateMetricsSpec defines the desired state of KubeStateMetrics
 type KubeStateMetricsSpec struct {
 	// Image specifies the kube-state-metrics image to deploy
@@ -60,15 +48,6 @@ type KubeStateMetricsSpec struct {
 	// Resources defines resource requests and limits for the kube-state-metrics container
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
-
-	// ConfigRef references a KubeStateMetricsConfig resource containing the configuration
-	// +optional
-	ConfigRef *ConfigReference `json:"configRef,omitempty"`
-
-	// CustomResourceStateOnly when true, only monitors custom resources (not built-in Kubernetes resources)
-	// +kubebuilder:default=true
-	// +optional
-	CustomResourceStateOnly *bool `json:"customResourceStateOnly,omitempty"`
 
 	// Args specifies additional arguments to pass to kube-state-metrics
 	// +optional
@@ -108,7 +87,6 @@ type KubeStateMetricsStatus struct {
 
 	// ConfigSource indicates the source of the active configuration.
 	// "mcp" means a ConfigMap named kube-state-metrics-config was found on the MCP cluster.
-	// "onboarding" means the configuration was resolved from a KubeStateMetricsConfig resource via configRef.
 	// Empty means no configuration is active.
 	// +optional
 	ConfigSource string `json:"configSource,omitempty"`

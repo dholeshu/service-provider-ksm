@@ -200,13 +200,8 @@ func runInit(platformCluster *clusters.Cluster, providerName string) {
 		Version: v1alpha1.GroupVersion.Version,
 		Kind:    "KubeStateMetrics",
 	}
-	ksmConfigGVK := metav1.GroupVersionKind{
-		Group:   v1alpha1.GroupVersion.Group,
-		Version: v1alpha1.GroupVersion.Version,
-		Kind:    "KubeStateMetricsConfig",
-	}
 	logger.Info("Registering service-provider-ksm GVKs at the ServiceProvider object")
-	if err := libutils.RegisterGVKsAtServiceProvider(ctx, platformCluster.Client(), providerName, ksmGVK, ksmConfigGVK); err != nil {
+	if err := libutils.RegisterGVKsAtServiceProvider(ctx, platformCluster.Client(), providerName, ksmGVK); err != nil {
 		logger.Error(err, "Failed to register service provider GVKs")
 		os.Exit(1)
 	}
@@ -367,15 +362,6 @@ func runCommand(cmd *cobra.Command, _ []string) error {
 	}
 	if err := ksmReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller KubeStateMetrics: %w", err)
-	}
-
-	ksmConfigReconciler := &controller.KubeStateMetricsConfigReconciler{
-		PlatformCluster:   platformCluster,
-		OnboardingCluster: onboardingCluster,
-		Recorder:          mgr.GetEventRecorderFor("sp-ksm-config-controller"),
-	}
-	if err := ksmConfigReconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("unable to create controller KubeStateMetricsConfig: %w", err)
 	}
 
 	providerConfigReconciler := &controller.ProviderConfigReconciler{

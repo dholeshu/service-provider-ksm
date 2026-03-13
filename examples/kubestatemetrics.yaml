@@ -11,9 +11,6 @@ spec:
   namespace: observability
   replicas: 1
 
-  configRef:
-    name: my-config
-
   resources:
     requests:
       cpu: 100m
